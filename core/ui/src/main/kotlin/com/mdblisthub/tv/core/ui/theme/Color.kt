@@ -79,15 +79,16 @@ object HubColors {
                 TextDim = Color(0xFF00f3ff)
                 TextFaint = Color(0xFFff0055)
             }
-            // Dark and clean, carried by the one red accent.
+            // Deep red-black surfaces keep the whole theme recognizably red,
+            // while preserving enough contrast for artwork and white text.
             HubThemeVariant.NETFLIXY -> {
-                Background = Color(0xFF000000)
-                Surface = Color(0xFF121212)
-                SurfaceStrong = Color(0xFF1F1F1F)
-                Border = Color(0xFF333333)
+                Background = Color(0xFF080001)
+                Surface = Color(0xFF1A080A)
+                SurfaceStrong = Color(0xFF2B0C10)
+                Border = Color(0xFF5A151A)
                 Accent = Color(0xFFE50914)
                 AccentSoft = Color(0xFFFF5252)
-                Accent2 = Color(0xFFE50914)
+                Accent2 = Color(0xFFFF1F2D)
                 Text = Color(0xFFFFFFFF)
                 TextDim = Color(0xFFB3B3B3)
                 TextFaint = Color(0xFF808080)

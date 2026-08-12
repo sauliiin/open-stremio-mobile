@@ -1,5 +1,6 @@
 package com.mdblisthub.tv.ui.home
 
+import android.content.res.Configuration
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalConfiguration
 import kotlinx.coroutines.isActive
@@ -553,7 +554,7 @@ fun HomeScreen(
                     // to tap. A compact hero (see [HeroPanelContent]) is what
                     // this height is sized to fit.
                     val configuration = LocalConfiguration.current
-                    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+                    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
                     val heroHeight = when {
                         // Primefly's landscape cards are short enough (73dp,
                         // wide instead of tall) that a bare compact hero left
@@ -934,7 +935,7 @@ private fun HeroPanel(viewModel: HomeViewModel) {
 private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
     if (HubColors.isNetflixy || HubColors.isPrimefly) {
         val configuration = LocalConfiguration.current
-        val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+        val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
         Column(
             modifier = Modifier
@@ -963,17 +964,11 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
 
             val logoUrl = itemDetail?.logoUrl
             // Landscape turns the whole screen into roughly what the hero
-            // alone used to occupy in portrait, so the logo and its padding
-            // shrink to match — Netflixy's more than Primefly's, since its
-            // portrait logo was bigger to start with and its shelf card
-            // (below) doesn't have Primefly's landscape headroom to spare.
+            // alone used to occupy in portrait, so both themes use a compact
+            // logo without making the artwork too small to recognize.
             val logoHeight = when {
-                isLandscape && HubColors.isPrimefly -> 40.dp
-                // Bigger than the first landscape pass, paid for by a
-                // shorter synopsis (one fewer line) and a smaller card
-                // below — see the synopsis height further down and
-                // HubDimens.PosterHeight.
-                isLandscape -> 52.dp
+                isLandscape && HubColors.isPrimefly -> 23.dp
+                isLandscape -> 30.dp
                 else -> 100.dp
             }
             val logoBottomPadding = when {
@@ -1014,27 +1009,29 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
                 ),
             )
 
-            // The synopsis now shows in landscape too, for both themes —
-            // just shorter than portrait's, sized to still leave one full
-            // shelf row beneath it. See the hero box height in HomeScreen,
-            // tuned against exactly these numbers.
+            // In landscape both themes expose exactly three 22sp lines at a
+            // time. Portrait keeps the roomier, theme-specific treatment.
             val overview = itemDetail?.overview
             if (overview != null) {
-                val synopsisHeight = when {
-                    HubColors.isPrimefly -> 96.dp
-                    // Two lines, not three — the line traded away paid for
-                    // the bigger clearlogo above it. A little taller than a
-                    // bare two lines so the second one has breathing room
-                    // instead of clipping mid-scroll.
-                    isLandscape -> 56.dp
-                    else -> 110.dp
+                if (isLandscape) {
+                    Text(
+                        text = overview,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = HubColors.Text,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(0.55f),
+                    )
+                } else {
+                    AutoScrollText(
+                        text = overview,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = HubColors.Text,
+                        modifier = Modifier
+                            .fillMaxWidth(0.55f)
+                            .height(if (HubColors.isPrimefly) 96.dp else 110.dp),
+                    )
                 }
-                AutoScrollText(
-                    text = overview,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = HubColors.Text,
-                    modifier = Modifier.fillMaxWidth(0.55f).height(synopsisHeight),
-                )
             }
         }
     } else {

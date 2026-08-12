@@ -32,13 +32,20 @@ class MainActivity : ComponentActivity() {
         val graph = (application as HubApplication).graph
 
         setContent {
+            // Read the host configuration before replacing LocalConfiguration
+            // with the locale-aware one below. The Activity handles rotation
+            // itself, so keying the wrapped context only on language froze its
+            // original portrait dimensions forever. Rebuilding it whenever
+            // Android publishes a new configuration keeps landscape-specific
+            // sizing and line limits in sync after the phone rotates.
+            val systemConfiguration = LocalConfiguration.current
             val language by graph.uiPreferences.language
                 .collectAsStateWithLifecycle(initialValue = DEFAULT_LANGUAGE)
 
             val activity = this
-            val localeContext = remember(language) {
+            val localeContext = remember(language, systemConfiguration) {
                 val locale = Locale.forLanguageTag(language)
-                val configuration = Configuration(resources.configuration).apply {
+                val configuration = Configuration(systemConfiguration).apply {
                     setLocale(locale)
                 }
                 activity.createConfigurationContext(configuration)
