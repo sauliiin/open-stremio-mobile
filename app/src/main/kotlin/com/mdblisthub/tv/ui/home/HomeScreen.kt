@@ -1,6 +1,7 @@
 package com.mdblisthub.tv.ui.home
 
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalConfiguration
 import kotlinx.coroutines.isActive
 import androidx.compose.foundation.verticalScroll
 
@@ -529,7 +530,36 @@ fun HomeScreen(
                     // is what makes the shelf below land exactly on a row
                     // boundary — two full rows, nothing peeking — instead of
                     // guessing at a height and hoping a row lines up.
-                    val heroHeight = if (HubColors.isPrimefly) 240.dp else 330.dp
+                    //
+                    // Landscape gets its own, much smaller number: the phone
+                    // is on its side, so the *whole screen* is roughly what
+                    // the portrait hero alone used to claim. Reusing the
+                    // portrait height left zero — sometimes negative — room
+                    // for the shelf underneath, which is what made touch
+                    // navigation reach nothing: there was no card on screen
+                    // to tap. A compact hero (see [HeroPanelContent]) is what
+                    // this height is sized to fit.
+                    val configuration = LocalConfiguration.current
+                    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+                    val heroHeight = when {
+                        // Primefly's landscape cards are short enough (73dp,
+                        // wide instead of tall) that a bare compact hero left
+                        // room for two full rows below it — the synopsis lost
+                        // out to a row nobody asked to see twice. Taller here
+                        // trades that second row back for the synopsis this
+                        // theme is supposed to have, landing on one full row
+                        // instead of two.
+                        isLandscape && HubColors.isPrimefly -> 170.dp
+                        // Netflixy's landscape card shrank instead (see
+                        // HubDimens.PosterHeight), which is what pays for
+                        // this: the row it lands one full copy of costs less
+                        // vertical space than it used to, and that slack
+                        // goes back into the hero rather than sitting empty
+                        // above the shelf.
+                        isLandscape -> 160.dp
+                        HubColors.isPrimefly -> 240.dp
+                        else -> 330.dp
+                    }
                     Box(Modifier.fillMaxWidth().height(heroHeight)) {
                         HeroPanel(viewModel)
                     }
@@ -890,6 +920,9 @@ private fun HeroPanel(viewModel: HomeViewModel) {
 @Composable
 private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
     if (HubColors.isNetflixy || HubColors.isPrimefly) {
+        val configuration = LocalConfiguration.current
+        val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -900,7 +933,11 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
                 // sized exactly to its content instead, so without real
                 // padding here the synopsis's last line sits flush against
                 // the shelf title with nothing between them.
-                .padding(start = HubDimens.ScreenPaddingHorizontal, end = HubDimens.ScreenPaddingHorizontal, bottom = 16.dp)
+                .padding(
+                    start = HubDimens.ScreenPaddingHorizontal,
+                    end = HubDimens.ScreenPaddingHorizontal,
+                    bottom = if (isLandscape) 6.dp else 16.dp,
+                )
                 .fillMaxHeight(),
             verticalArrangement = Arrangement.Bottom,
         ) {
@@ -912,13 +949,32 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
             }
 
             val logoUrl = itemDetail?.logoUrl
-            val logoBottomPadding = if (HubColors.isPrimefly) 4.dp else 20.dp
+            // Landscape turns the whole screen into roughly what the hero
+            // alone used to occupy in portrait, so the logo and its padding
+            // shrink to match — Netflixy's more than Primefly's, since its
+            // portrait logo was bigger to start with and its shelf card
+            // (below) doesn't have Primefly's landscape headroom to spare.
+            val logoHeight = when {
+                isLandscape && HubColors.isPrimefly -> 40.dp
+                // Bigger than the first landscape pass, paid for by a
+                // shorter synopsis (one fewer line) and a smaller card
+                // below — see the synopsis height further down and
+                // HubDimens.PosterHeight.
+                isLandscape -> 52.dp
+                else -> 100.dp
+            }
+            val logoBottomPadding = when {
+                isLandscape && HubColors.isPrimefly -> 4.dp
+                isLandscape -> 8.dp
+                HubColors.isPrimefly -> 4.dp
+                else -> 20.dp
+            }
             if (logoUrl != null) {
                 AsyncImage(
                     model = logoUrl,
                     contentDescription = item.title,
                     contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                    modifier = Modifier.height(100.dp).padding(bottom = logoBottomPadding),
+                    modifier = Modifier.height(logoHeight).padding(bottom = logoBottomPadding),
                     alignment = Alignment.BottomStart,
                 )
             } else {
@@ -931,40 +987,41 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
                     modifier = Modifier.padding(bottom = logoBottomPadding)
                 )
             }
-            
+
             HeroMetadataRow(
                 item = item,
                 detail = itemDetail,
-                modifier = Modifier.padding(bottom = if (HubColors.isPrimefly) 6.dp else 12.dp),
+                modifier = Modifier.padding(
+                    bottom = when {
+                        isLandscape && HubColors.isPrimefly -> 4.dp
+                        isLandscape -> 8.dp
+                        HubColors.isPrimefly -> 6.dp
+                        else -> 12.dp
+                    },
+                ),
             )
 
+            // The synopsis now shows in landscape too, for both themes —
+            // just shorter than portrait's, sized to still leave one full
+            // shelf row beneath it. See the hero box height in HomeScreen,
+            // tuned against exactly these numbers.
             val overview = itemDetail?.overview
             if (overview != null) {
-                if (HubColors.isPrimefly) {
-                    AutoScrollText(
-                        text = overview,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = HubColors.Text,
-                        // Four visible lines, then the exact same timed
-                        // vertical scroll used by the Netflixy synopsis.
-                        modifier = Modifier.fillMaxWidth(0.55f).height(96.dp),
-                    )
-                } else {
-                    AutoScrollText(
-                        text = overview,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = HubColors.Text,
-                        // A fixed height, not `weight(1f, fill = false)`: an
-                        // open-ended synopsis is what let the hero's total
-                        // height vary with how much overview text there was,
-                        // which in turn made the shelf below land mid-row
-                        // instead of on a row boundary — a partial row of
-                        // posters peeking above the fold. Fixed height keeps
-                        // the hero's total size constant, which is what the
-                        // shelf's fixed height below is tuned against.
-                        modifier = Modifier.fillMaxWidth(0.55f).height(110.dp),
-                    )
+                val synopsisHeight = when {
+                    HubColors.isPrimefly -> 96.dp
+                    // Two lines, not three — the line traded away paid for
+                    // the bigger clearlogo above it. A little taller than a
+                    // bare two lines so the second one has breathing room
+                    // instead of clipping mid-scroll.
+                    isLandscape -> 56.dp
+                    else -> 110.dp
                 }
+                AutoScrollText(
+                    text = overview,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = HubColors.Text,
+                    modifier = Modifier.fillMaxWidth(0.55f).height(synopsisHeight),
+                )
             }
         }
     } else {

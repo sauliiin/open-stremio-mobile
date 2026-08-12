@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
@@ -44,8 +46,28 @@ object HubDimens {
     // phone screen at a time, the way Netflix/Prime's own mobile home does —
     // tall enough to read comfortably, short enough that a third row is
     // always at least partly visible as the "there's more" cue to scroll.
-    val PosterWidth get() = if (HubColors.isPrimefly) 130.dp else 108.dp
-    val PosterHeight get() = if (HubColors.isPrimefly) 73.dp else 162.dp
+    //
+    // Landscape shrinks the non-Primefly card further, and reads
+    // configuration to do it — the portrait card is sized against a screen
+    // that is mostly height to spend; on its side that same phone has
+    // barely 300-400dp of height total, shared with the hero above and the
+    // nav bar below, and a 162dp-tall card left no way to fit even one row
+    // next to either.
+    val PosterWidth: Dp
+        @Composable get() {
+            if (HubColors.isPrimefly) return 130.dp
+            val config = LocalConfiguration.current
+            return if (config.screenWidthDp > config.screenHeightDp) 65.dp else 108.dp
+        }
+    val PosterHeight: Dp
+        @Composable get() {
+            if (HubColors.isPrimefly) return 73.dp
+            val config = LocalConfiguration.current
+            // A little smaller again than the first landscape pass — traded
+            // for a bigger clearlogo in the Netflixy hero above (see
+            // HomeScreen), not for its own sake.
+            return if (config.screenWidthDp > config.screenHeightDp) 98.dp else 162.dp
+        }
 }
 
 @Composable
