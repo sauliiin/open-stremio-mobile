@@ -9,6 +9,12 @@ vez de D-pad. Ele não depende do app de TV nem o modifica; são dois projetos
 Gradle independentes, cada um com seu próprio `applicationId`, para poder
 instalar os dois lado a lado no mesmo aparelho sem conflito.
 
+### Demonstração
+
+<video src="sample/sample.mp4" controls width="360"></video>
+
+*(se o vídeo não carregar, ele está em [`sample/sample.mp4`](sample/sample.mp4))*
+
 ### O que muda em relação ao app de TV
 
 - **Navegação por toque**: o rail lateral que só aparecia com foco de D-pad foi
