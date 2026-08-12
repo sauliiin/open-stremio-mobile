@@ -1,0 +1,25 @@
+# Build output
+build/
+.gradle/
+*.apk
+*.aab
+captures/
+
+# Local machine configuration — SDK paths differ per checkout, and a committed
+# one breaks the build for everyone else.
+local.properties
+
+# Signing material. Nothing here should ever reach a remote.
+*.jks
+*.keystore
+keystore.properties
+
+# IDEs
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.iml
+
+# System files
+.DS_Store
+Thumbs.db
