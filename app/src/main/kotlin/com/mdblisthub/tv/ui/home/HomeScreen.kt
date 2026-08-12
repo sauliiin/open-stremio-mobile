@@ -56,7 +56,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.ui.res.stringResource
@@ -273,15 +272,18 @@ fun HomeScreen(
                     color = HubColors.TextDim,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
+                    HubButton(
+                        text = stringResource(R.string.home_delete),
+                        primary = true,
                         onClick = {
                             viewModel.removeResumePoint(point)
                             resumeRemovalTarget = null
                         },
-                    ) { Text(stringResource(R.string.home_delete)) }
-                    Button(onClick = { resumeRemovalTarget = null }) {
-                        Text(stringResource(R.string.home_cancel))
-                    }
+                    )
+                    HubButton(
+                        text = stringResource(R.string.home_cancel),
+                        onClick = { resumeRemovalTarget = null },
+                    )
                 }
             }
         }
@@ -307,17 +309,18 @@ fun HomeScreen(
                         color = HubColors.Text
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Button(
-                            onClick = { 
+                        HubButton(
+                            text = stringResource(R.string.home_yes),
+                            primary = true,
+                            onClick = {
                                 showExitDialog = false
-                                viewModel.signOut(onSignOut) 
-                            }
-                        ) {
-                            Text(stringResource(R.string.home_yes))
-                        }
-                        Button(onClick = { showExitDialog = false }) {
-                            Text(stringResource(R.string.home_no))
-                        }
+                                viewModel.signOut(onSignOut)
+                            },
+                        )
+                        HubButton(
+                            text = stringResource(R.string.home_no),
+                            onClick = { showExitDialog = false },
+                        )
                     }
                 }
             }
@@ -346,7 +349,9 @@ fun HomeScreen(
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
+                    HubButton(
+                        text = stringResource(R.string.home_save),
+                        primary = true,
                         enabled = renameValue.isNotBlank(),
                         onClick = {
                             when (target) {
@@ -359,8 +364,11 @@ fun HomeScreen(
                             }
                             renameTarget = null
                         },
-                    ) { Text(stringResource(R.string.home_save)) }
-                    Button(onClick = { renameTarget = null }) { Text(stringResource(R.string.home_cancel)) }
+                    )
+                    HubButton(
+                        text = stringResource(R.string.home_cancel),
+                        onClick = { renameTarget = null },
+                    )
                 }
             }
         }
@@ -389,7 +397,9 @@ fun HomeScreen(
                     color = HubColors.TextDim,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
+                    HubButton(
+                        text = stringResource(R.string.home_delete),
+                        primary = true,
                         onClick = {
                             when (target) {
                                 is EditableListTarget.Mdblist -> viewModel.deleteList(target.list)
@@ -398,8 +408,11 @@ fun HomeScreen(
                             }
                             deleteTarget = null
                         },
-                    ) { Text(stringResource(R.string.home_delete)) }
-                    Button(onClick = { deleteTarget = null }) { Text(stringResource(R.string.home_cancel)) }
+                    )
+                    HubButton(
+                        text = stringResource(R.string.home_cancel),
+                        onClick = { deleteTarget = null },
+                    )
                 }
             }
         }
