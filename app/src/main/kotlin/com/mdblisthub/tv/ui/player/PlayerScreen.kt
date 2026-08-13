@@ -1,5 +1,6 @@
 package com.mdblisthub.tv.ui.player
 
+import android.content.res.Configuration
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
@@ -84,6 +85,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
@@ -92,6 +94,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -645,10 +648,23 @@ private fun ResolvingVeil(
     attempt: Int,
     total: Int,
 ) {
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    // Every fixed size below was tuned against a TV screen or a phone in
+    // portrait — both hundreds of dp taller than a phone turned sideways.
+    // Unchanged, the synopsis's own fixed 126dp box plus the 64dp top/bottom
+    // margins already outweighed a landscape phone's entire height, so the
+    // weighted spinner block below had nothing left to claim and rendered at
+    // zero height — the spinner did not fail to draw, it was squeezed out of
+    // existence. Landscape gets a compact pass on every element in this veil
+    // instead of just the one that happened to be the final straw, since the
+    // others were only one shorter screen away from the same fate.
+    val outerPaddingV = if (isLandscape) 24.dp else 64.dp
     // Height reserved for the status footer below, so the centred block above
     // can never grow into it — see the comment on that footer for why this
     // used to be one unbroken column instead of two.
-    val footerHeight = 96.dp
+    val footerHeight = if (isLandscape) 64.dp else 96.dp
 
     Box(Modifier.fillMaxSize()) {
         FanartBackdrop(url = backdropUrl, scrim = 0.9f)
@@ -657,7 +673,7 @@ private fun ResolvingVeil(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 64.dp)
-                .padding(top = 64.dp, bottom = 64.dp + footerHeight),
+                .padding(top = outerPaddingV, bottom = outerPaddingV + footerHeight),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // Weighted rather than a plain Center-arranged sibling of the
@@ -675,8 +691,8 @@ private fun ResolvingVeil(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-            HubSpinner(size = 44.dp)
-            Spacer(Modifier.height(32.dp))
+            HubSpinner(size = if (isLandscape) 32.dp else 44.dp)
+            Spacer(Modifier.height(if (isLandscape) 12.dp else 32.dp))
 
             val infiniteTransition = rememberInfiniteTransition(label = "ClearlogoTransition")
             val alpha by infiniteTransition.animateFloat(
@@ -704,7 +720,7 @@ private fun ResolvingVeil(
                     contentDescription = title,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
-                        .heightIn(max = 112.dp)
+                        .heightIn(max = if (isLandscape) 56.dp else 112.dp)
                         .fillMaxWidth(0.35f)
                         .scale(scale)
                         .alpha(alpha)
@@ -723,27 +739,45 @@ private fun ResolvingVeil(
             }
 
             if (!overview.isNullOrBlank()) {
-                Spacer(Modifier.height(48.dp))
-                AutoScrollText(
-                    text = overview,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = HubColors.TextDim,
-                    modifier = Modifier
-                        .widthIn(max = 700.dp)
-                        // Exactly 5 lines, guaranteed: this box is a fixed
-                        // sibling of the weighted spinner/logo block above,
-                        // not sharing a Center arrangement with it, so it is
-                        // never squeezed by that block overflowing on a
-                        // shorter screen. Not simply 5 * bodyMedium's nominal
-                        // 21.sp line height (105dp) — measured on device that
-                        // undershoots by roughly a fifth of a line, almost
-                        // certainly Android's default font padding/leading
-                        // that the nominal lineHeight doesn't account for.
-                        // 126dp is the value that actually renders 5 full
-                        // lines; text past that scrolls via AutoScrollText
-                        // rather than being cut off blind.
-                        .height(126.dp)
-                )
+                Spacer(Modifier.height(if (isLandscape) 16.dp else 48.dp))
+                if (isLandscape) {
+                    // A fixed 126dp box — fine when the tallest thing on
+                    // screen is the synopsis itself — is what ate the
+                    // spinner's space in the first place on a landscape
+                    // phone. `maxLines` sizes to its content instead of
+                    // claiming a fixed budget, the same trade this screen's
+                    // home hero already makes for its own landscape synopsis.
+                    Text(
+                        text = overview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = HubColors.TextDim,
+                        textAlign = TextAlign.Center,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 700.dp),
+                    )
+                } else {
+                    AutoScrollText(
+                        text = overview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = HubColors.TextDim,
+                        modifier = Modifier
+                            .widthIn(max = 700.dp)
+                            // Exactly 5 lines, guaranteed: this box is a fixed
+                            // sibling of the weighted spinner/logo block above,
+                            // not sharing a Center arrangement with it, so it is
+                            // never squeezed by that block overflowing on a
+                            // shorter screen. Not simply 5 * bodyMedium's nominal
+                            // 21.sp line height (105dp) — measured on device that
+                            // undershoots by roughly a fifth of a line, almost
+                            // certainly Android's default font padding/leading
+                            // that the nominal lineHeight doesn't account for.
+                            // 126dp is the value that actually renders 5 full
+                            // lines; text past that scrolls via AutoScrollText
+                            // rather than being cut off blind.
+                            .height(126.dp)
+                    )
+                }
             }
         }
 
@@ -759,7 +793,7 @@ private fun ResolvingVeil(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 64.dp)
+                .padding(bottom = outerPaddingV)
                 .height(footerHeight),
             verticalArrangement = Arrangement.Bottom,
             horizontalAlignment = Alignment.CenterHorizontally,
