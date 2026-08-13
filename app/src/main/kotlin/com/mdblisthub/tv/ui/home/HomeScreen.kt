@@ -962,15 +962,17 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
                 return@Column
             }
 
-            val logoUrl = itemDetail?.logoUrl
-            // Landscape turns the whole screen into roughly what the hero
-            // alone used to occupy in portrait, so both themes use a compact
-            // logo without making the artwork too small to recognize.
-            val logoHeight = when {
-                isLandscape && HubColors.isPrimefly -> 23.dp
-                isLandscape -> 30.dp
-                else -> 100.dp
-            }
+            // Landscape squeezes the hero down to a strip barely taller than
+            // one line of text — plenty of room to read a clearlogo at its
+            // usual size on a TV panel, not on a phone turned sideways. The
+            // artwork itself is already doing the "this is a known title"
+            // job at that size; the title text is what stays legible, so
+            // landscape shows it instead of the logo rather than alongside
+            // an illegibly shrunk one.
+            val logoUrl = itemDetail?.logoUrl.takeUnless { isLandscape }
+            // Only reached in portrait now — landscape never has a `logoUrl`
+            // to draw, so there is no cramped size to size for here anymore.
+            val logoHeight = 100.dp
             val logoBottomPadding = when {
                 isLandscape && HubColors.isPrimefly -> 4.dp
                 isLandscape -> 8.dp
