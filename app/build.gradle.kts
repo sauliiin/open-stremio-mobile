@@ -19,8 +19,8 @@ android {
         applicationId = "com.openstream.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 7
-        versionName = "0.5.9"
+        versionCode = 8
+        versionName = "0.9.0"
 
         // x86 (32-bit) is back on the list deliberately: the emulator this
         // app is tested on reports exactly that ABI, and without a native
@@ -107,6 +107,7 @@ dependencies {
     implementation(libs.profileinstaller)
 
     debugImplementation(libs.compose.ui.tooling)
+    testImplementation(libs.junit)
 
     // Where the profile comes from. `:baselineprofile` builds nothing that
     // ships; this wiring is what makes its output land in the release APK.
