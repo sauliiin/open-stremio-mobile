@@ -1,28 +1,39 @@
 package com.mdblisthub.tv.core.ui.component
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mdblisthub.tv.core.ui.R
-import androidx.tv.material3.IconButton
 import androidx.tv.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
@@ -35,6 +46,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.shape.CircleShape
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
@@ -148,73 +160,52 @@ fun MediaRow(
         verticalArrangement = Arrangement.spacedBy(if (HubColors.isPrimefly) 6.dp else 10.dp),
     ) {
         Row(
-            modifier = Modifier.padding(start = HubDimens.ScreenPaddingHorizontal),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = HubDimens.ScreenPaddingHorizontal),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleLarge,
                 color = HubColors.Text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
             
             if (isEditMode) {
-                Spacer(modifier = Modifier.weight(1f))
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(end = HubDimens.ScreenPaddingHorizontal),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    IconButton(
+                    EditIconButton(
+                        imageVector = Icons.Default.ArrowUpward,
+                        contentDescription = moveUpLabel,
                         onClick = onMoveUp,
                         enabled = canMoveUp,
-                        colors = editIconColors(),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowUpward,
-                            contentDescription = moveUpLabel,
-                            tint = if (canMoveUp) HubColors.Text else HubColors.TextFaint,
-                        )
-                    }
-                    IconButton(
+                    )
+                    EditIconButton(
+                        imageVector = Icons.Default.ArrowDownward,
+                        contentDescription = moveDownLabel,
                         onClick = onMoveDown,
                         enabled = canMoveDown,
-                        colors = editIconColors(),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowDownward,
-                            contentDescription = moveDownLabel,
-                            tint = if (canMoveDown) HubColors.Text else HubColors.TextFaint,
-                        )
-                    }
-                    IconButton(
+                    )
+                    EditIconButton(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = renameLabel,
                         onClick = onRename,
-                        colors = editIconColors(),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = renameLabel,
-                            tint = HubColors.Text,
-                        )
-                    }
-                    IconButton(
+                    )
+                    EditIconButton(
+                        imageVector = if (hidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (hidden) showLabel else hideLabel,
                         onClick = onToggleVisibility,
-                        colors = editIconColors(),
-                    ) {
-                        Icon(
-                            imageVector = if (hidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (hidden) showLabel else hideLabel,
-                            tint = HubColors.Text
-                        )
-                    }
-                    IconButton(
+                    )
+                    EditIconButton(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = deleteLabel,
                         onClick = onDelete,
-                        colors = editIconColors(),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = deleteLabel,
-                            tint = HubColors.Rotten,
-                        )
-                    }
+                        tint = HubColors.Rotten,
+                    )
                 }
             }
         }
@@ -254,8 +245,50 @@ fun MediaRow(
 }
 
 @Composable
-private fun editIconColors() = androidx.tv.material3.IconButtonDefaults.colors(
-    focusedContainerColor = HubColors.Accent,
-    focusedContentColor = HubColors.Text,
-    contentColor = HubColors.TextFaint,
-)
+private fun EditIconButton(
+    imageVector: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    tint: Color = HubColors.Text,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val pressed by interaction.collectIsPressedAsState()
+    val background by animateColorAsState(
+        targetValue = when {
+            !enabled -> Color.Transparent
+            pressed -> HubColors.Accent.copy(alpha = 0.72f)
+            focused -> HubColors.Accent
+            else -> HubColors.Surface.copy(alpha = 0.62f)
+        },
+        label = "edit-button-background",
+    )
+
+    Box(
+        modifier = Modifier
+            // Keep a real 48 dp hit target. TV IconButton is focus-first; this
+            // explicit clickable surface is also reliable for direct touch.
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(background)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = contentDescription,
+            tint = when {
+                !enabled -> HubColors.TextFaint
+                focused -> HubColors.Text
+                else -> tint
+            },
+            modifier = Modifier.size(24.dp),
+        )
+    }
+}
