@@ -1,5 +1,6 @@
 package com.mdblisthub.tv.core.ui.component
 
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
@@ -54,6 +56,8 @@ fun BottomNavBar(
     onSelect: (RailItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val compact = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+
     BoxWithConstraints(modifier.fillMaxWidth()) {
         // Fixed per-item width, not SpaceEvenly: SpaceEvenly divides up
         // whatever width the row ends up with, which inside a horizontal
@@ -67,13 +71,14 @@ fun BottomNavBar(
             modifier = Modifier
                 .background(HubColors.Surface.copy(alpha = 0.97f))
                 .horizontalScroll(rememberScrollState())
-                .padding(vertical = 8.dp),
+                .padding(vertical = if (compact) 2.dp else 8.dp),
         ) {
             items.forEach { item ->
                 BottomNavButton(
                     item = item,
                     selected = item.key == selectedKey,
                     onClick = { onSelect(item) },
+                    compact = compact,
                     modifier = Modifier.width(itemWidth),
                 )
             }
@@ -86,6 +91,7 @@ private fun BottomNavButton(
     item: RailItem,
     selected: Boolean,
     onClick: () -> Unit,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -93,17 +99,17 @@ private fun BottomNavButton(
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 0.dp else 2.dp),
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = if (compact) 2.dp else 6.dp),
     ) {
         Icon(
             imageVector = item.icon,
             contentDescription = item.label,
             tint = tint,
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(if (compact) 20.dp else 22.dp),
         )
         Text(
             text = item.label,

@@ -556,20 +556,16 @@ fun HomeScreen(
                     val configuration = LocalConfiguration.current
                     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
                     val heroHeight = when {
-                        // Primefly's landscape cards are short enough (73dp,
-                        // wide instead of tall) that a bare compact hero left
+                        // Primefly's landscape cards are short and wide, so a
+                        // bare compact hero left
                         // room for two full rows below it — the synopsis lost
                         // out to a row nobody asked to see twice. Taller here
                         // trades that second row back for the synopsis this
                         // theme is supposed to have, landing on one full row
                         // instead of two.
                         isLandscape && HubColors.isPrimefly -> 170.dp
-                        // Netflixy's landscape card shrank instead (see
-                        // HubDimens.PosterHeight), which is what pays for
-                        // this: the row it lands one full copy of costs less
-                        // vertical space than it used to, and that slack
-                        // goes back into the hero rather than sitting empty
-                        // above the shelf.
+                        // Netflixy's landscape card remains compact enough to
+                        // fit beside the hero while preserving poster shape.
                         isLandscape -> 160.dp
                         HubColors.isPrimefly -> 240.dp
                         else -> 330.dp

@@ -47,26 +47,23 @@ object HubDimens {
     // tall enough to read comfortably, short enough that a third row is
     // always at least partly visible as the "there's more" cue to scroll.
     //
-    // Landscape shrinks the non-Primefly card further, and reads
-    // configuration to do it — the portrait card is sized against a screen
-    // that is mostly height to spend; on its side that same phone has
-    // barely 300-400dp of height total, shared with the hero above and the
-    // nav bar below, and a 162dp-tall card left no way to fit even one row
-    // next to either.
+    // Landscape reads configuration so each theme can keep its native card
+    // shape while making use of the height recovered from the compact nav.
+    // Both landscape formats are scaled by roughly the same 12%, so neither
+    // portrait posters nor Primefly's 16:9 artwork is stretched.
     val PosterWidth: Dp
         @Composable get() {
-            if (HubColors.isPrimefly) return 130.dp
             val config = LocalConfiguration.current
-            return if (config.screenWidthDp > config.screenHeightDp) 65.dp else 108.dp
+            val isLandscape = config.screenWidthDp > config.screenHeightDp
+            if (HubColors.isPrimefly) return if (isLandscape) 146.dp else 130.dp
+            return if (isLandscape) 73.dp else 108.dp
         }
     val PosterHeight: Dp
         @Composable get() {
-            if (HubColors.isPrimefly) return 73.dp
             val config = LocalConfiguration.current
-            // A little smaller again than the first landscape pass — traded
-            // for a bigger clearlogo in the Netflixy hero above (see
-            // HomeScreen), not for its own sake.
-            return if (config.screenWidthDp > config.screenHeightDp) 98.dp else 162.dp
+            val isLandscape = config.screenWidthDp > config.screenHeightDp
+            if (HubColors.isPrimefly) return if (isLandscape) 82.dp else 73.dp
+            return if (isLandscape) 110.dp else 162.dp
         }
 }
 

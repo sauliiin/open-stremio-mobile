@@ -1,5 +1,6 @@
 package com.mdblisthub.tv.ui.settings
 
+import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -220,6 +222,7 @@ fun SettingsScreen(graph: DataGraph, onBack: () -> Unit) {
 
     var subtitlePickerOpen by remember { mutableStateOf(false) }
     var audioPickerOpen by remember { mutableStateOf(false) }
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     BackHandler {
         when {
@@ -244,7 +247,10 @@ fun SettingsScreen(graph: DataGraph, onBack: () -> Unit) {
             color = HubColors.Text,
             modifier = Modifier
                 .padding(horizontal = HubDimens.ScreenPaddingHorizontal)
-                .padding(top = HubDimens.ScreenPaddingVertical * 2, bottom = 18.dp),
+                .padding(
+                    top = if (isLandscape) 8.dp else HubDimens.ScreenPaddingVertical * 2,
+                    bottom = if (isLandscape) 6.dp else 18.dp,
+                ),
         )
 
         LazyColumn(
@@ -252,9 +258,9 @@ fun SettingsScreen(graph: DataGraph, onBack: () -> Unit) {
             contentPadding = PaddingValues(
                 start = HubDimens.ScreenPaddingHorizontal,
                 end = HubDimens.ScreenPaddingHorizontal,
-                bottom = HubDimens.ScreenPaddingVertical,
+                bottom = if (isLandscape) 8.dp else HubDimens.ScreenPaddingVertical,
             ),
-            verticalArrangement = Arrangement.spacedBy(22.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isLandscape) 12.dp else 22.dp),
         ) {
         item(key = "interface") {
             SettingsCard(title = stringResource(R.string.settings_section_interface)) {
@@ -426,14 +432,15 @@ fun SettingsScreen(graph: DataGraph, onBack: () -> Unit) {
 
 @Composable
 private fun SettingsCard(title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    val compact = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(HubColors.Surface.copy(alpha = 0.65f))
             .border(1.dp, HubColors.Border, RoundedCornerShape(14.dp))
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+            .padding(if (compact) 12.dp else 20.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 20.dp)
     ) {
         Text(title, style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
         content()
@@ -442,7 +449,8 @@ private fun SettingsCard(title: String, content: @Composable androidx.compose.fo
 
 @Composable
 private fun SettingsRow(label: String, content: @Composable () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val compact = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    Column(verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp)) {
         Text(label, style = MaterialTheme.typography.bodyLarge, color = HubColors.TextDim)
         // Scrollable, not just wrapped in spacedBy: a phone-width card is
         // narrower than four option buttons laid out at their natural
