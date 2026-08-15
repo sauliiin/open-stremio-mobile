@@ -21,6 +21,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -1098,7 +1099,7 @@ private fun PlayerOsd(
         val progressBarInteraction = remember { MutableInteractionSource() }
         val progressBarFocused by progressBarInteraction.collectIsFocusedAsState()
         val progressBarHeight by animateDpAsState(
-            if (progressBarFocused) 12.dp else 6.dp,
+            if (progressBarFocused) 10.dp else 5.dp,
             focusTween(),
             label = "progress-bar-height",
         )
@@ -1111,13 +1112,15 @@ private fun PlayerOsd(
         // The timeline is intentionally inset and compact: play sits on its
         // left edge, elapsed time guards the start, and the negative value at
         // the far end reads as time remaining without an extra label.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth(0.8f)
-                .align(Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center,
         ) {
+            Row(
+                modifier = Modifier.width((maxWidth * 0.8f) + 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
             TimelinePlayButton(
                 playing = playing,
                 onClick = onTogglePlay,
@@ -1133,7 +1136,7 @@ private fun PlayerOsd(
                         }
                     },
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = formatTime(positionMs),
                 style = MaterialTheme.typography.titleMedium.copy(
@@ -1146,7 +1149,7 @@ private fun PlayerOsd(
                     .weight(1f)
                     .height(progressBarHeight)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(HubColors.Border)
+                    .background(Color(0xFFD9D9D9).copy(alpha = 0.6f))
                     .border(
                         width = progressBarGlow,
                         color = if (progressBarFocused) HubColors.Accent else Color.Transparent,
@@ -1183,6 +1186,7 @@ private fun PlayerOsd(
                 ),
                 color = HubColors.TextDim,
             )
+        }
         }
 
         Row(
