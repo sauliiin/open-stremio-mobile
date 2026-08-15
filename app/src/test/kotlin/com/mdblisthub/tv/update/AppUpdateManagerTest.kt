@@ -1,7 +1,9 @@
 package com.mdblisthub.tv.update
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppUpdateManagerTest {
@@ -12,6 +14,14 @@ class AppUpdateManagerTest {
         assertEquals(0, compareVersions("v.0.6.5", "0.6.5"))
         assertEquals(-1, compareVersions("v.0.6.5", "0.7.0"))
         assertNull(compareVersions("latest", "0.7.0"))
+    }
+
+    @Test
+    fun updateIsOfferedOnlyForANumericallyNewerVersion() {
+        assertTrue(isNewerVersion("v.0.9.2", "0.9.1"))
+        assertFalse(isNewerVersion("v.0.9.1", "0.9.1"))
+        assertFalse(isNewerVersion("v.0.9.0", "0.9.1"))
+        assertFalse(isNewerVersion("latest", "0.9.1"))
     }
 
     @Test

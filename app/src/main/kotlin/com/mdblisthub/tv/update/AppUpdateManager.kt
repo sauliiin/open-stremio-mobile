@@ -56,9 +56,9 @@ sealed interface UpdateUiState {
  * Checks the repository's latest stable GitHub release and installs its APK.
  *
  * GitHub's `releases/latest` endpoint deliberately excludes drafts and
- * prereleases. The installed APK is also compared with every published asset
- * by SHA-256. That makes the check reliable even when a historical release tag
- * and the APK's Android versionName were not kept in sync.
+ * prereleases. An update is offered only when its numeric version is newer
+ * than the installed one; rebuilding or replacing an asset under the same
+ * version must not repeatedly prompt users who already have that version.
  */
 class AppUpdateManager(
     private val activity: Activity,
@@ -82,25 +82,11 @@ class AppUpdateManager(
                 .getOrNull()
                 ?: return@launch // Startup checks stay quiet when the device is offline.
 
-            val installedDigest = runCatching {
-                withContext(Dispatchers.IO) {
-                    sha256(File(activity.applicationInfo.sourceDir))
-                }
-            }.getOrNull()
-
-            val isPublishedAsset = installedDigest != null && release.assets.any { asset ->
-                asset.sha256?.equals(installedDigest, ignoreCase = true) == true
-            }
             val installedVersion = runCatching {
                 activity.packageManager.getPackageInfo(activity.packageName, 0).versionName.orEmpty()
             }.getOrDefault("")
 
-            // A higher local version is a development build ahead of the last
-            // release and must never be downgraded. Equal versions with a
-            // different digest are offered because GitHub permits replacing a
-            // release asset without changing its tag.
-            val versionOrder = compareVersions(release.tag, installedVersion)
-            if (!isPublishedAsset && (versionOrder == null || versionOrder >= 0)) {
+            if (isNewerVersion(release.tag, installedVersion)) {
                 _state.value = UpdateUiState.Available(release)
             }
         }
@@ -323,6 +309,9 @@ internal fun compareVersions(remote: String, local: String): Int? {
     }
     return 0
 }
+
+internal fun isNewerVersion(remote: String, local: String): Boolean =
+    compareVersions(remote, local)?.let { it > 0 } ?: false
 
 private fun versionParts(version: String): List<Int>? {
     val parts = Regex("\\d+").findAll(version).mapNotNull { it.value.toIntOrNull() }.toList()
