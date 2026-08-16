@@ -91,6 +91,7 @@ import com.mdblisthub.tv.core.ui.component.MediaRow
 import com.mdblisthub.tv.core.ui.component.RatingBadges
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
+import com.mdblisthub.tv.player.OfflineStatus
 import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.hubViewModel
 import kotlinx.coroutines.delay
@@ -102,9 +103,11 @@ fun DetailScreen(
     graph: DataGraph,
     type: MediaType,
     tmdbId: Int,
+    initialBackdropUrl: String? = null,
     onBack: () -> Unit,
     onPlay: (season: Int?, episode: Int?) -> Unit,
     onSelectSource: (season: Int?, episode: Int?) -> Unit,
+    onOffline: (season: Int?, episode: Int?) -> Unit,
     onOpenTitle: (MediaItem) -> Unit,
 ) {
     val viewModel = hubViewModel(key = "detail-$type-$tmdbId") {
@@ -117,6 +120,7 @@ fun DetailScreen(
     val pending by viewModel.pending.collectAsStateWithLifecycle()
     val libraryError by viewModel.libraryError.collectAsStateWithLifecycle()
     val castBio by viewModel.castBio.collectAsStateWithLifecycle()
+    val offline by viewModel.offline.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -180,12 +184,15 @@ fun DetailScreen(
 
     val current = detail
     if (current == null) {
-        LoadingScreen(message = stringResource(R.string.loading_fetching))
+        Box(Modifier.fillMaxSize()) {
+            FanartBackdrop(url = initialBackdropUrl, scrim = 0.86f)
+            LoadingScreen(message = stringResource(R.string.loading_fetching))
+        }
         return
     }
 
     Box(Modifier.fillMaxSize()) {
-        FanartBackdrop(url = current.backdropUrl, scrim = 0.86f)
+        FanartBackdrop(url = current.backdropUrl ?: initialBackdropUrl, scrim = 0.86f)
 
         CompositionLocalProvider(LocalBringIntoViewSpec provides pinWhileOnButtons) {
         LazyColumn(
@@ -300,6 +307,35 @@ fun DetailScreen(
                                     onSelectSource(season, firstEpisode)
                                 } else {
                                     onSelectSource(null, null)
+                                }
+                            },
+                            modifier = Modifier.fillMaxHeight(),
+                        )
+                        val offlineLabel = when (offline?.status) {
+                            null -> stringResource(R.string.detail_offline)
+                            OfflineStatus.DOWNLOADING -> {
+                                val percent = offline?.percentDownloaded?.coerceIn(0f, 100f) ?: 0f
+                                stringResource(R.string.detail_offline_downloading, percent)
+                            }
+                            OfflineStatus.QUEUED -> stringResource(R.string.detail_offline_cancel)
+                            OfflineStatus.REMOVING -> stringResource(R.string.detail_offline_removing)
+                            OfflineStatus.FAILED -> stringResource(R.string.detail_offline_failed)
+                            OfflineStatus.COMPLETED,
+                            OfflineStatus.STOPPED,
+                            -> stringResource(R.string.detail_offline_remove)
+                        }
+                        HubButton(
+                            text = offlineLabel,
+                            enabled = offline?.status != OfflineStatus.REMOVING,
+                            onClick = {
+                                if (offline == null) {
+                                    if (type == MediaType.SHOW) {
+                                        onOffline(season, firstEpisode)
+                                    } else {
+                                        onOffline(null, null)
+                                    }
+                                } else {
+                                    viewModel.removeOffline()
                                 }
                             },
                             modifier = Modifier.fillMaxHeight(),

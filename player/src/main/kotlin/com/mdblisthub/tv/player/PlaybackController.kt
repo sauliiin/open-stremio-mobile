@@ -23,6 +23,8 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.offline.DownloadHelper
+import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.DefaultAllocator
@@ -50,11 +52,10 @@ import kotlinx.coroutines.launch
  * automatic playback still has a chance.** They press play, and a queue of
  * candidates is walked until one produces a frame. A dead mirror, an expired
  * debrid token or a container the decoder chokes on are all the same event
- * here — move to the next one — and none of them is worth a dialog. Only once
- * every candidate has failed (see [fail]) is the same queue handed to the UI
- * as [PlaybackState.availableSources], so the user can try one by hand via
- * [playManual] — at that point automatic failover has already proven it
- * cannot decide for them.
+ * here — move to the next one — and none of them is worth a dialog. A source
+ * the controller has already proven dead is removed from
+ * [PlaybackState.availableSources], so a rejected removal notice can never be
+ * offered again as a manual escape hatch.
  *
  * Candidates arrive as a [Flow] rather than a finished [List]: the repository
  * probes every mirror in parallel and hands each one over the moment it is
@@ -300,6 +301,18 @@ class PlaybackController(
      */
     private var manualMode = false
 
+    /** True whenever playback is waiting for a source choice. */
+    private var sourceSelectionMode = false
+
+    /**
+     * Offline selection prepares candidates here, paused, and accepts only
+     * READY non-decoys with a supported video track. Ordinary manual playback
+     * can disable this and retain the repository's faster discovery behavior.
+     */
+    private var selectionValidationMode = false
+    private var stopAfterFirstValidatedSource = false
+    private val validatedSources = mutableListOf<PlayableStream>()
+
     /** Resume point, applied once a source is actually ready. */
     private var resumePercent: Float? = null
     private var resumeApplied = false
@@ -336,6 +349,13 @@ class PlaybackController(
      */
     private var committedStream: PlayableStream? = null
     private var committedRetries = 0
+
+    /**
+     * Non-null only for a completed offline registration. Reopens keep using
+     * the cache-only media source, so a corrupt/missing span can never silently
+     * fall through to the network and pretend offline playback succeeded.
+     */
+    private var offlineRequest: DownloadRequest? = null
 
     /** Position/intention carried while a failed source is replaced. */
     private var failoverPositionMs: Long? = null
@@ -389,11 +409,12 @@ class PlaybackController(
         candidates: Flow<PlayableStream>,
         resumeAtPercent: Float? = null,
         expectedRuntimeMinutes: Int? = null,
-        // When true, candidates are still collected in the background but
-        // none is opened automatically: the queue is surfaced as
-        // PlaybackState.availableSources as it grows, and the caller picks
-        // one by hand via [playManual]. See [PlaybackPhase.SELECTING].
+        // When true, candidates are surfaced for a choice. The caller may ask
+        // for Media3 validation first (offline selection) or trust the
+        // repository's normal fast discovery (ordinary manual playback).
         selectManually: Boolean = false,
+        validateSelectedSources: Boolean = true,
+        stopAfterFirstValidated: Boolean = false,
     ) {
         stopInternal()
         subtitleTrack = null
@@ -402,9 +423,14 @@ class PlaybackController(
         queueIndex = -1
         passes = 0
         decoyIndices.clear()
+        validatedSources.clear()
         manualMode = false
+        sourceSelectionMode = selectManually
+        selectionValidationMode = selectManually && validateSelectedSources
+        stopAfterFirstValidatedSource = selectionValidationMode && stopAfterFirstValidated
         committedStream = null
         committedRetries = 0
+        offlineRequest = null
         // Per-title, like everything above: the next film's track 2 has nothing
         // to do with this one's, and a stale silence would mute it on sight.
         forcedAudioId = null
@@ -429,28 +455,88 @@ class PlaybackController(
                 .catch { }
                 .collect { stream ->
                     queue += stream
+                    if (sourceSelectionMode && !selectionValidationMode &&
+                        validatedSources.none { it.key == stream.key }
+                    ) {
+                        // This mode receives only results that passed the
+                        // repository's normal parallel HTTP validation.
+                        validatedSources += stream
+                    }
                     _state.update {
                         it.copy(
                             candidateCount = queue.size,
-                            availableSources = if (selectManually) queue.toList() else it.availableSources,
+                            // Deep validation grows this in onReady(); the fast
+                            // manual mode grows it as the normal probe flow
+                            // produces candidates.
+                            availableSources = validatedSources.toList(),
                         )
                     }
-                    if (!selectManually && awaitingCandidate) {
+                    if ((!sourceSelectionMode || selectionValidationMode) && awaitingCandidate) {
                         awaitingCandidate = false
                         tryAdvance()
                     }
                 }
             candidatesCollecting = false
-            if (selectManually) {
-                // Nothing arrived to choose from — that is a failure the same
-                // way it is for the automatic cascade, just reached without
-                // ever trying to open anything.
-                if (queue.isEmpty()) fail(PlaybackFailure.NoCandidates)
+            if (sourceSelectionMode && !selectionValidationMode) {
+                awaitingCandidate = false
+                if (validatedSources.isEmpty()) {
+                    fail(PlaybackFailure.NoCandidates)
+                } else {
+                    _state.update {
+                        it.copy(
+                            phase = PlaybackPhase.SELECTING,
+                            activeStream = null,
+                            availableSources = validatedSources.toList(),
+                            error = null,
+                        )
+                    }
+                }
             } else if (awaitingCandidate) {
                 awaitingCandidate = false
                 tryAdvance()
             }
         }
+    }
+
+    /** Opens a completed Media3 download without constructing any upstream source. */
+    fun playOffline(
+        download: OfflineDownload,
+        resumeAtPercent: Float? = null,
+        expectedRuntimeMinutes: Int? = null,
+    ) {
+        stopInternal()
+        subtitleTrack = null
+
+        val stream = download.metadata.stream
+        queue = mutableListOf(stream)
+        queueIndex = 0
+        passes = 0
+        decoyIndices.clear()
+        validatedSources.clear()
+        candidatesCollecting = false
+        awaitingCandidate = false
+        manualMode = true
+        sourceSelectionMode = false
+        selectionValidationMode = false
+        stopAfterFirstValidatedSource = false
+        committedStream = null
+        committedRetries = 0
+        offlineRequest = download.request
+        forcedAudioId = null
+        silencedAudioId = null
+        expectedRuntimeMs = expectedRuntimeMinutes
+            ?.takeIf { it > 0 }
+            ?.let { it * 60_000L }
+        resumePercent = resumeAtPercent?.takeIf { it > 1f && it < 95f }
+        resumeApplied = false
+
+        _state.value = PlaybackState(
+            phase = PlaybackPhase.RESOLVING,
+            activeStream = stream,
+            candidateCount = 1,
+            attempt = 1,
+        )
+        open(stream)
     }
 
     /**
@@ -470,11 +556,36 @@ class PlaybackController(
         if (nextIndex >= queue.size) {
             if (candidatesCollecting) {
                 awaitingCandidate = true
-                _state.update { it.copy(phase = PlaybackPhase.RESOLVING) }
+                _state.update {
+                    it.copy(
+                        phase = if (selectionValidationMode) {
+                            PlaybackPhase.SELECTING
+                        } else {
+                            PlaybackPhase.RESOLVING
+                        },
+                        activeStream = null,
+                    )
+                }
                 return
             }
             if (queue.isEmpty()) {
                 fail(PlaybackFailure.NoCandidates)
+                return
+            }
+            if (selectionValidationMode) {
+                runCatching { player.stop() }
+                if (validatedSources.isEmpty()) {
+                    fail(PlaybackFailure.AllCandidatesFailed(queue.size))
+                } else {
+                    _state.update {
+                        it.copy(
+                            phase = PlaybackPhase.SELECTING,
+                            activeStream = null,
+                            availableSources = validatedSources.toList(),
+                            error = null,
+                        )
+                    }
+                }
                 return
             }
             passes++
@@ -495,7 +606,11 @@ class PlaybackController(
 
         _state.update {
             it.copy(
-                phase = PlaybackPhase.RESOLVING,
+                phase = if (selectionValidationMode) {
+                    PlaybackPhase.SELECTING
+                } else {
+                    PlaybackPhase.RESOLVING
+                },
                 attempt = queueIndex + 1,
                 candidateCount = queue.size,
                 error = null,
@@ -519,6 +634,22 @@ class PlaybackController(
      * the real duration is known.
      */
     private fun open(stream: PlayableStream) {
+        offlineRequest?.let { request ->
+            val mediaSource = DownloadHelper.createMediaSource(
+                request,
+                OfflineDownloads.cacheOnlyDataSourceFactory(),
+            )
+            val startPositionMs = failoverPositionMs ?: estimatedResumePositionMs()
+            if (startPositionMs != null) {
+                player.setMediaSource(mediaSource, startPositionMs)
+            } else {
+                player.setMediaSource(mediaSource)
+            }
+            player.prepare()
+            player.playWhenReady = failoverPlayWhenReady ?: true
+            return
+        }
+
         val url = stream.url ?: return
 
         // Replaced wholesale rather than merged: the factory is shared across
@@ -537,14 +668,18 @@ class PlaybackController(
             .setCustomCacheKey(stream.filename?.takeIf { it.isNotBlank() })
             .build()
 
-        val startPositionMs = failoverPositionMs ?: estimatedResumePositionMs()
+        val startPositionMs = if (selectionValidationMode) {
+            null
+        } else {
+            failoverPositionMs ?: estimatedResumePositionMs()
+        }
         if (startPositionMs != null) {
             player.setMediaItem(mediaItem, startPositionMs)
         } else {
             player.setMediaItem(mediaItem)
         }
         player.prepare()
-        player.playWhenReady = failoverPlayWhenReady ?: true
+        player.playWhenReady = if (selectionValidationMode) false else failoverPlayWhenReady ?: true
     }
 
     /**
@@ -561,12 +696,12 @@ class PlaybackController(
 
     /**
      * Plays exactly the source the user picked, bypassing the cascade
-     * entirely — called once [PlaybackPhase.FAILED] has already offered up
+     * entirely — called once the UI has offered up the validated
      * [PlaybackState.availableSources] and the user tapped one of them.
      *
-     * [queue] and [expectedRuntimeMs] are left untouched: the list the veil
-     * is showing came from `queue`, and re-failing has to be able to show it
-     * again, while a decoy is still a decoy regardless of who chose it.
+     * [queue] and [expectedRuntimeMs] are left untouched: a decoy is still a
+     * decoy regardless of who chose it, and a link can expire between being
+     * validated and being tapped.
      */
     fun playManual(stream: PlayableStream) {
         watchdog?.cancel()
@@ -574,9 +709,20 @@ class PlaybackController(
         candidatesJob?.cancel()
         candidatesCollecting = false
         awaitingCandidate = false
+        sourceSelectionMode = false
+        selectionValidationMode = false
+        stopAfterFirstValidatedSource = false
         manualMode = true
         committedStream = null
         committedRetries = 0
+
+        // The UI only receives this list, but keep the boundary here too: a
+        // stale click or a future caller cannot bypass validation accidentally.
+        if (validatedSources.none { it.key == stream.key }) {
+            fail(PlaybackFailure.ManualFailed)
+            return
+        }
+        queueIndex = queue.indexOfFirst { it.key == stream.key }
 
         if (stream.url == null) {
             fail(PlaybackFailure.ManualNoLink)
@@ -646,6 +792,7 @@ class PlaybackController(
             val dead = everDelivered && stalledMs >= ATTEMPT_STALL_MS
             if (dead || waitedMs >= ATTEMPT_HARD_CAP_MS) {
                 if (manualMode) {
+                    invalidateCurrentSource()
                     fail(PlaybackFailure.ManualUnresponsive)
                 } else {
                     tryAdvance()
@@ -664,7 +811,11 @@ class PlaybackController(
             Player.STATE_BUFFERING -> _state.update {
                 // A buffer stall mid-playback is worth showing; one during the
                 // cascade is not, since the veil is already up.
-                if (it.phase == PlaybackPhase.RESOLVING) it else it.copy(phase = PlaybackPhase.BUFFERING)
+                if (it.phase == PlaybackPhase.RESOLVING || it.phase == PlaybackPhase.SELECTING) {
+                    it
+                } else {
+                    it.copy(phase = PlaybackPhase.BUFFERING)
+                }
             }
             else -> Unit
         }
@@ -710,6 +861,7 @@ class PlaybackController(
         }
 
         if (manualMode) {
+            invalidateCurrentSource()
             fail(PlaybackFailure.ManualFailed)
         } else {
             tryAdvance()
@@ -775,7 +927,12 @@ class PlaybackController(
             // so the cascade can do its job again.
             committedStream = null
             committedRetries = 0
-            if (manualMode) fail(PlaybackFailure.ManualFailed) else tryAdvance()
+            if (manualMode) {
+                invalidateCurrentSource()
+                fail(PlaybackFailure.ManualFailed)
+            } else {
+                tryAdvance()
+            }
             return
         }
 
@@ -804,6 +961,12 @@ class PlaybackController(
                 currentSubtitleId = text.indexOfFirst { entry -> entry.third },
             )
         }
+
+        // Media3 does not guarantee that the READY and track callbacks are
+        // delivered in the order this validator would prefer. If READY came
+        // first, onReady() deliberately left the candidate pending; this
+        // callback now has enough information to accept it as a real video.
+        acceptValidatedSelection(tracks)
     }
 
     /** Flattens ExoPlayer's group/index tracks into `(info, override, selected)`. */
@@ -853,6 +1016,15 @@ class PlaybackController(
     }
 
     private fun onReady() {
+        if (selectionValidationMode) {
+            // If tracks have not arrived yet, keep the watchdog alive and let
+            // onTracksChanged() complete the same check. Treating an empty
+            // track snapshot as an audio-only file here caused real movies to
+            // be skipped intermittently.
+            acceptValidatedSelection(player.currentTracks)
+            return
+        }
+
         if (isDecoy()) return rejectDecoy()
 
         watchdog?.cancel()
@@ -897,6 +1069,52 @@ class PlaybackController(
     }
 
     /**
+     * Accepts the candidate only once Media3 is both READY and reporting a
+     * supported video track. Returns without changing candidates while either
+     * half of that asynchronous result is still missing.
+     */
+    private fun acceptValidatedSelection(tracks: Tracks) {
+        if (!selectionValidationMode || player.playbackState != Player.STATE_READY) return
+
+        val candidate = _state.value.activeStream ?: return
+        val hasPlayableVideo = tracks.groups.any { group ->
+            group.type == C.TRACK_TYPE_VIDEO &&
+                (0 until group.length).any { index ->
+                    group.isTrackSupported(index, /* allowExceedsCapabilities = */ true)
+                }
+        }
+        if (!hasPlayableVideo) return
+        if (isDecoy()) return rejectDecoy()
+
+        watchdog?.cancel()
+        watchdog = null
+        if (validatedSources.none { it.key == candidate.key }) {
+            validatedSources += candidate
+        }
+
+        val validationFinished = stopAfterFirstValidatedSource
+        _state.update {
+            it.copy(
+                phase = PlaybackPhase.SELECTING,
+                // Automatic selection needs the first result immediately so
+                // the download can start. The manual fallback publishes only
+                // after the entire queue has been checked, preventing a
+                // partial one-source picker from appearing mid-validation.
+                availableSources = if (validationFinished) {
+                    validatedSources.toList()
+                } else {
+                    emptyList()
+                },
+                activeStream = null,
+                error = null,
+            )
+        }
+        runCatching { player.stop() }
+        if (validationFinished) return
+        tryAdvance()
+    }
+
+    /**
      * `canShowVideo` does not include ENDED, so without this the OSD and its
      * "voltar" button disappear along with the video the instant a film
      * finishes, leaving a black screen with no way off it but the physical
@@ -909,6 +1127,18 @@ class PlaybackController(
         // clip. Announcing "Fim" for a film nobody watched is the worst
         // possible reading of that, so it is checked here too.
         if (isDecoy()) return rejectDecoy()
+
+        // A candidate that ends while it is merely being validated never
+        // became a usable film. Do not turn the picker into an "ended" screen
+        // and, crucially, do not offer that source to the user.
+        if (selectionValidationMode) {
+            decoyIndices += queueIndex
+            watchdog?.cancel()
+            watchdog = null
+            runCatching { player.stop() }
+            tryAdvance()
+            return
+        }
 
         watchdog?.cancel()
         watchdog = null
@@ -945,11 +1175,13 @@ class PlaybackController(
         watchdog = null
 
         if (manualMode) {
+            invalidateCurrentSource()
             fail(PlaybackFailure.ManualDecoy)
             return
         }
 
         decoyIndices += queueIndex
+        runCatching { player.stop() }
 
         // `resumeApplied` is deliberately left alone: nothing was watched, so
         // whatever resume point the user had is still owed to the next
@@ -962,8 +1194,19 @@ class PlaybackController(
         ticker?.cancel()
         runCatching { player.stop() }
         _state.update {
-            it.copy(phase = PlaybackPhase.FAILED, error = failure, availableSources = queue.toList())
+            it.copy(
+                phase = PlaybackPhase.FAILED,
+                error = failure,
+                activeStream = null,
+                availableSources = validatedSources.toList(),
+            )
         }
+    }
+
+    /** Permanently removes a source that failed after it had been validated. */
+    private fun invalidateCurrentSource() {
+        val failed = _state.value.activeStream ?: return
+        validatedSources.removeAll { it.key == failed.key }
     }
 
     /**
@@ -1247,6 +1490,10 @@ class PlaybackController(
         stopInternal()
         subtitleTrack = null
         manualMode = false
+        sourceSelectionMode = false
+        selectionValidationMode = false
+        stopAfterFirstValidatedSource = false
+        validatedSources.clear()
         _state.value = PlaybackState()
     }
 

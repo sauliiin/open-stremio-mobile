@@ -163,18 +163,27 @@ fun PosterCard(
                             interactionSource = interaction,
                             indication = null,
                             onClick = { onFocused(item) },
-                            onDoubleClick = onClick,
+                            onDoubleClick = {
+                                onFocused(item)
+                                onClick()
+                            },
                             onLongClick = onLongClick,
                         )
                         onLongClick == null -> base.clickable(
                             interactionSource = interaction,
                             indication = null,
-                            onClick = onClick,
+                            onClick = {
+                                onFocused(item)
+                                onClick()
+                            },
                         )
                         else -> base.combinedClickable(
                             interactionSource = interaction,
                             indication = null,
-                            onClick = onClick,
+                            onClick = {
+                                onFocused(item)
+                                onClick()
+                            },
                             onLongClick = onLongClick,
                         )
                     }

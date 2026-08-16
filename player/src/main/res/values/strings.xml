@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="offline_notification_channel">Downloads offline</string>
+    <string name="offline_notification_progress">Baixando para assistir offline</string>
+</resources>

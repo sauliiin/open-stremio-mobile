@@ -1,6 +1,7 @@
 # Build output
 build/
 .gradle/
+.kotlin/
 *.apk
 *.aab
 captures/

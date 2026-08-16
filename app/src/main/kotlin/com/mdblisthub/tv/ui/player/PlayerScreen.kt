@@ -98,6 +98,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -122,6 +123,7 @@ import com.mdblisthub.tv.player.TrackInfo
 import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.hubViewModel
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlinx.coroutines.delay
 
 private const val OSD_TIMEOUT_MS = 4_000L
@@ -152,6 +154,10 @@ private val SLIDER_TRACK_FOCUSED = 6.dp
 private val SLIDER_THUMB_RESTING = 7.dp
 private val SLIDER_THUMB_FOCUSED = 10.dp
 private val SLIDER_TICK_WIDTH = 3.dp
+
+/** A fingertip-sized target around a deliberately small playback thumb. */
+private val PLAYBACK_THUMB_RESTING = 6.dp
+private val PLAYBACK_THUMB_ACTIVE = 8.dp
 
 /**
  * Held past this, a direction key stops being a single step and starts sliding.
@@ -201,17 +207,40 @@ fun PlayerScreen(
     season: Int?,
     episode: Int?,
     manualSelect: Boolean = false,
+    downloadOffline: Boolean = false,
     onBack: () -> Unit,
     onOpenAddons: () -> Unit,
 ) {
     val appContext = LocalContext.current.applicationContext
-    val viewModel = hubViewModel(key = "player-$type-$tmdbId-$season-$episode-$manualSelect") {
-        PlayerViewModel(graph, appContext, type, tmdbId, season, episode, manualSelect)
+    val viewModel = hubViewModel(
+        key = "player-$type-$tmdbId-$season-$episode-$manualSelect-$downloadOffline",
+    ) {
+        PlayerViewModel(
+            graph,
+            appContext,
+            type,
+            tmdbId,
+            season,
+            episode,
+            manualSelect,
+            downloadOffline,
+        )
     }
 
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val castPreview by viewModel.castPreview.collectAsStateWithLifecycle()
     val playback by viewModel.controller.state.collectAsStateWithLifecycle()
+
+    val automaticOfflineSource = playback.availableSources.firstOrNull()
+    LaunchedEffect(
+        downloadOffline,
+        ui.autoOfflineSelection,
+        automaticOfflineSource?.key,
+    ) {
+        if (downloadOffline && ui.autoOfflineSelection && automaticOfflineSource != null) {
+            if (viewModel.downloadForOffline(automaticOfflineSource)) onBack()
+        }
+    }
     
     val subtitleColorString by viewModel.subtitleColor.collectAsStateWithLifecycle()
 
@@ -454,51 +483,102 @@ fun PlayerScreen(
          * entire point of hiding the sources — the failover has to be
          * invisible, or it is just a slower version of a picker.
          */
-        if (ui.searching || playback.phase == PlaybackPhase.RESOLVING) {
-            ResolvingVeil(
-                backdropUrl = ui.backdropUrl,
-                logoUrl = ui.logoUrl,
-                overview = ui.overview,
-                title = ui.title,
-                subtitle = ui.episodeLabel,
-                attempt = playback.attempt,
-                total = playback.candidateCount,
-            )
-        }
+        val preparingOffline = shouldShowOfflinePreparing(
+            downloadOffline = downloadOffline,
+            phase = playback.phase,
+            noAddons = ui.noAddons,
+            missingImdbId = ui.missingImdbId,
+        )
+        // These state flows can publish on adjacent frames. A single ordered
+        // branch prevents a stale `searching` value from painting a resolving
+        // screen over source selection or an error.
+        when {
+            playback.phase == PlaybackPhase.FAILED || ui.noAddons || ui.missingImdbId -> {
+                FailureVeil(
+                    backdropUrl = ui.backdropUrl,
+                    title = stringResource(R.string.player_failed_title),
+                    message = when {
+                        ui.noAddons -> stringResource(R.string.player_no_addons)
+                        ui.missingImdbId -> stringResource(R.string.player_no_imdb)
+                        else -> playback.error?.message()
+                            ?: stringResource(R.string.player_generic_error)
+                    },
+                    showAddons = ui.noAddons || playback.phase == PlaybackPhase.FAILED,
+                    onOpenAddons = onOpenAddons,
+                    onBack = onBack,
+                    sources = playback.availableSources,
+                    onSelectSource = { stream -> viewModel.controller.playManual(stream) },
+                )
+            }
 
-        if (playback.phase == PlaybackPhase.SELECTING) {
-            FailureVeil(
-                backdropUrl = ui.backdropUrl,
-                title = stringResource(R.string.player_select_title),
-                message = if (playback.availableSources.isEmpty()) {
-                    stringResource(R.string.player_select_searching)
+            playback.phase == PlaybackPhase.SELECTING -> {
+                // A validated automatic source is consumed by the effect
+                // above. Never flash it as a manual choice in the meantime.
+                val visibleSources = if (downloadOffline && ui.autoOfflineSelection) {
+                    emptyList()
                 } else {
-                    stringResource(R.string.player_select_pick)
-                },
-                showAddons = false,
-                onOpenAddons = onOpenAddons,
-                onBack = onBack,
-                sources = playback.availableSources,
-                onSelectSource = { stream -> viewModel.controller.playManual(stream) },
-            )
-        }
+                    playback.availableSources
+                }
+                FailureVeil(
+                    backdropUrl = ui.backdropUrl,
+                    title = stringResource(
+                        when {
+                            downloadOffline && ui.autoOfflineSelection -> {
+                                R.string.offline_auto_starting_title
+                            }
+                            downloadOffline -> R.string.offline_select_title
+                            else -> R.string.player_select_title
+                        },
+                    ),
+                    message = if (visibleSources.isEmpty()) {
+                        stringResource(R.string.player_select_searching)
+                    } else {
+                        stringResource(
+                            if (downloadOffline) {
+                                R.string.offline_select_pick
+                            } else {
+                                R.string.player_select_pick
+                            },
+                        )
+                    },
+                    showAddons = false,
+                    onOpenAddons = onOpenAddons,
+                    onBack = onBack,
+                    sources = visibleSources,
+                    onSelectSource = { stream ->
+                        if (downloadOffline) {
+                            if (viewModel.downloadForOffline(stream)) onBack()
+                        } else {
+                            viewModel.controller.playManual(stream)
+                        }
+                    },
+                )
+            }
 
-        if (playback.phase == PlaybackPhase.FAILED || ui.noAddons || ui.missingImdbId) {
-            FailureVeil(
-                backdropUrl = ui.backdropUrl,
-                title = stringResource(R.string.player_failed_title),
-                message = when {
-                    ui.noAddons -> stringResource(R.string.player_no_addons)
-                    ui.missingImdbId -> stringResource(R.string.player_no_imdb)
-                    else -> playback.error?.message()
-                        ?: stringResource(R.string.player_generic_error)
-                },
-                showAddons = ui.noAddons || playback.phase == PlaybackPhase.FAILED,
-                onOpenAddons = onOpenAddons,
-                onBack = onBack,
-                sources = playback.availableSources,
-                onSelectSource = { stream -> viewModel.controller.playManual(stream) },
-            )
+            preparingOffline -> {
+                // Offline is known from the navigation argument on the very
+                // first composition, before the ViewModel resolves metadata.
+                FailureVeil(
+                    backdropUrl = ui.backdropUrl,
+                    title = stringResource(R.string.offline_preparing_title),
+                    message = stringResource(R.string.offline_preparing_message),
+                    showAddons = false,
+                    onOpenAddons = onOpenAddons,
+                    onBack = onBack,
+                )
+            }
+
+            ui.searching || playback.phase == PlaybackPhase.RESOLVING -> {
+                ResolvingVeil(
+                    backdropUrl = ui.backdropUrl,
+                    logoUrl = ui.logoUrl,
+                    overview = ui.overview,
+                    title = ui.title,
+                    subtitle = ui.episodeLabel,
+                    attempt = playback.attempt,
+                    total = playback.candidateCount,
+                )
+            }
         }
 
         // `canShowVideo` deliberately excludes ENDED — without a veil here the
@@ -550,6 +630,8 @@ fun PlayerScreen(
                 subtitleActive = playback.externalSubtitle != null ||
                     playback.currentSubtitleId != NO_TRACK,
                 onTogglePlay = { viewModel.controller.togglePlayPause(); poke() },
+                onSeekTo = { position -> viewModel.controller.seekTo(position); poke() },
+                onTimelineInteraction = { poke() },
                 onCycleScale = { viewModel.controller.cycleScale(); poke() },
                 onOpenSubtitles = {
                     castRailOpen = false
@@ -861,6 +943,17 @@ private fun ResolvingVeil(
     }
 }
 
+/** True from the first frame of an offline route, but never over an error. */
+internal fun shouldShowOfflinePreparing(
+    downloadOffline: Boolean,
+    phase: PlaybackPhase,
+    noAddons: Boolean,
+    missingImdbId: Boolean,
+): Boolean = downloadOffline &&
+    !noAddons &&
+    !missingImdbId &&
+    (phase == PlaybackPhase.IDLE || phase == PlaybackPhase.RESOLVING)
+
 @Composable
 private fun FailureVeil(
     backdropUrl: String?,
@@ -1059,6 +1152,8 @@ private fun PlayerOsd(
     playing: Boolean,
     subtitleActive: Boolean,
     onTogglePlay: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onTimelineInteraction: () -> Unit,
     onCycleScale: () -> Unit,
     onOpenSubtitles: () -> Unit,
     onOpenAudio: () -> Unit,
@@ -1108,6 +1203,9 @@ private fun PlayerOsd(
             focusTween(),
             label = "progress-bar-glow",
         )
+        var scrubPositionMs by remember { mutableStateOf<Long?>(null) }
+        val displayedPositionMs = (scrubPositionMs ?: positionMs)
+            .coerceIn(0L, durationMs.coerceAtLeast(0L))
 
         // The timeline is intentionally inset and compact: play sits on its
         // left edge, elapsed time guards the start, and the negative value at
@@ -1138,23 +1236,34 @@ private fun PlayerOsd(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = formatTime(positionMs),
+                text = formatTime(displayedPositionMs),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontSize = (MaterialTheme.typography.titleMedium.fontSize.value - 1f).sp,
                 ),
                 color = if (HubColors.isCyberpunk) HubColors.Accent else HubColors.Text,
             )
-            Box(
-                Modifier
+            PlaybackTimeline(
+                positionMs = displayedPositionMs,
+                durationMs = durationMs,
+                active = progressBarFocused || scrubPositionMs != null,
+                trackHeight = progressBarHeight,
+                glowWidth = progressBarGlow,
+                onScrub = { target ->
+                    scrubPositionMs = target
+                    onTimelineInteraction()
+                },
+                onScrubFinished = { target ->
+                    // Commit only once the finger is released. The thumb and
+                    // time labels already follow every move locally, avoiding
+                    // a new network range request for every pixel of a drag.
+                    onSeekTo(target)
+                    scrubPositionMs = null
+                },
+                modifier = Modifier
                     .weight(1f)
-                    .height(progressBarHeight)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFFD9D9D9).copy(alpha = 0.6f))
-                    .border(
-                        width = progressBarGlow,
-                        color = if (progressBarFocused) HubColors.Accent else Color.Transparent,
-                        shape = RoundedCornerShape(6.dp),
-                    )
+                    // A full fingertip hit area surrounds the slim visible
+                    // timeline and its small thumb.
+                    .height(OSD_BUTTON_SIZE)
                     .focusRequester(progressBarFocusRequester)
                     .focusable(interactionSource = progressBarInteraction)
                     .onKeyEvent { event ->
@@ -1165,22 +1274,9 @@ private fun PlayerOsd(
                             else -> false
                         }
                     },
-            ) {
-                val fraction = if (durationMs > 0) {
-                    (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
-                Box(
-                    Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(fraction)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (progressBarFocused) HubColors.AccentSoft else HubColors.Accent),
-                )
-            }
+            )
             Text(
-                text = formatTime((durationMs - positionMs).coerceAtLeast(0L)),
+                text = formatTime((durationMs - displayedPositionMs).coerceAtLeast(0L)),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontSize = (MaterialTheme.typography.titleMedium.fontSize.value - 1f).sp,
                 ),
@@ -1228,6 +1324,142 @@ private fun PlayerOsd(
             )
         }
     }
+}
+
+/**
+ * Playback timeline with a small theme-coloured thumb and a 48dp touch target.
+ * A tap jumps the preview to that point; dragging follows the finger; release
+ * performs one actual seek through [onScrubFinished].
+ */
+@Composable
+private fun PlaybackTimeline(
+    positionMs: Long,
+    durationMs: Long,
+    active: Boolean,
+    trackHeight: Dp,
+    glowWidth: Dp,
+    onScrub: (Long) -> Unit,
+    onScrubFinished: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val thumbRadius by animateDpAsState(
+        if (active) PLAYBACK_THUMB_ACTIVE else PLAYBACK_THUMB_RESTING,
+        focusTween(),
+        label = "playback-thumb-radius",
+    )
+    val thumbRadiusPx = with(LocalDensity.current) { thumbRadius.toPx() }
+    // Fixed at the largest visual radius: touch geometry must not shift while
+    // the thumb animates under a stationary finger.
+    val insetPx = with(LocalDensity.current) { PLAYBACK_THUMB_ACTIVE.toPx() }
+    val scrub by rememberUpdatedState(onScrub)
+    val finishScrub by rememberUpdatedState(onScrubFinished)
+
+    Canvas(
+        modifier = modifier.pointerInput(durationMs) {
+            if (durationMs <= 0L) return@pointerInput
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                down.consume()
+                var target = seekPositionAt(
+                    down.position.x,
+                    size.width.toFloat(),
+                    insetPx,
+                    durationMs,
+                )
+                scrub(target)
+
+                var pressed = true
+                while (pressed) {
+                    val event = awaitPointerEvent()
+                    event.changes.forEach { change ->
+                        if (change.pressed) {
+                            target = seekPositionAt(
+                                change.position.x,
+                                size.width.toFloat(),
+                                insetPx,
+                                durationMs,
+                            )
+                            scrub(target)
+                        }
+                        // Prevents the player root's tap gesture from hiding
+                        // the OSD when this child is being dragged.
+                        change.consume()
+                    }
+                    pressed = event.changes.any { it.pressed }
+                }
+                finishScrub(target)
+            }
+        },
+    ) {
+        val centreY = size.height / 2f
+        val safeInset = insetPx.coerceIn(0f, size.width / 2f)
+        val usable = (size.width - safeInset * 2f).coerceAtLeast(1f)
+        val fraction = if (durationMs > 0L) {
+            (positionMs.toDouble() / durationMs.toDouble()).coerceIn(0.0, 1.0).toFloat()
+        } else {
+            0f
+        }
+        val valueX = safeInset + usable * fraction
+        val trackPx = trackHeight.toPx()
+        val corner = CornerRadius(trackPx / 2f, trackPx / 2f)
+
+        if (glowWidth.value > 0f) {
+            val glowPx = glowWidth.toPx()
+            drawRoundRect(
+                color = HubColors.Accent.copy(alpha = 0.28f),
+                topLeft = Offset(safeInset, centreY - trackPx / 2f - glowPx),
+                size = Size(usable, trackPx + glowPx * 2f),
+                cornerRadius = CornerRadius(trackPx, trackPx),
+            )
+        }
+        drawRoundRect(
+            color = Color(0xFFD9D9D9).copy(alpha = 0.6f),
+            topLeft = Offset(safeInset, centreY - trackPx / 2f),
+            size = Size(usable, trackPx),
+            cornerRadius = corner,
+        )
+        if (fraction > 0f) {
+            drawRoundRect(
+                color = HubColors.Accent,
+                topLeft = Offset(safeInset, centreY - trackPx / 2f),
+                size = Size(usable * fraction, trackPx),
+                cornerRadius = corner,
+            )
+        }
+
+        // Dark halo keeps the small thumb legible on both the filled track and
+        // bright video frames; its centre always uses the active theme accent.
+        drawCircle(
+            color = HubColors.Background.copy(alpha = 0.75f),
+            radius = thumbRadiusPx + 1.5.dp.toPx(),
+            center = Offset(valueX, centreY),
+        )
+        drawCircle(
+            color = HubColors.Accent,
+            radius = thumbRadiusPx,
+            center = Offset(valueX, centreY),
+        )
+    }
+}
+
+/** Maps a touch x-coordinate onto the playable duration using the thumb inset. */
+internal fun seekPositionAt(
+    xPx: Float,
+    widthPx: Float,
+    thumbInsetPx: Float,
+    durationMs: Long,
+): Long {
+    if (durationMs <= 0L || widthPx <= 0f) return 0L
+    val safeInset = thumbInsetPx.coerceIn(0f, widthPx / 2f)
+    val usable = widthPx - safeInset * 2f
+    val fraction = if (usable > 0f) {
+        ((xPx - safeInset) / usable).coerceIn(0f, 1f)
+    } else {
+        (xPx / widthPx).coerceIn(0f, 1f)
+    }
+    return (fraction.toDouble() * durationMs.toDouble())
+        .roundToLong()
+        .coerceIn(0L, durationMs)
 }
 
 /** Title identity anchored halfway down the left edge of the picture. */

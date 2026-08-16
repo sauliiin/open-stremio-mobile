@@ -19,6 +19,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.LandscapeArtwork
+import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.model.MediaType
 import com.mdblisthub.tv.core.ui.component.LandscapeArtworkLoader
 import com.mdblisthub.tv.core.ui.component.LoadingScreen
@@ -41,17 +42,25 @@ object Routes {
     const val ADDONS = "addons"
     const val SETTINGS = "settings"
     const val DETAIL = "detail/{type}/{tmdbId}"
-    const val PLAYER = "player/{type}/{tmdbId}?season={season}&episode={episode}&select={select}"
+    const val PLAYER = "player/{type}/{tmdbId}?season={season}&episode={episode}&select={select}&offline={offline}"
 
     fun detail(type: MediaType, tmdbId: Int) = "detail/${type.mdblist}/$tmdbId"
 
-    fun player(type: MediaType, tmdbId: Int, season: Int? = null, episode: Int? = null, select: Boolean = false) =
-        "player/${type.mdblist}/$tmdbId?season=${season ?: -1}&episode=${episode ?: -1}&select=$select"
+    fun player(
+        type: MediaType,
+        tmdbId: Int,
+        season: Int? = null,
+        episode: Int? = null,
+        select: Boolean = false,
+        offline: Boolean = false,
+    ) = "player/${type.mdblist}/$tmdbId?season=${season ?: -1}&episode=${episode ?: -1}" +
+        "&select=$select&offline=$offline"
 }
 
 @Composable
 fun HubNavHost(graph: DataGraph) {
     val navController = rememberNavController()
+    var detailSeed by remember { mutableStateOf<MediaItem?>(null) }
     val signedIn by graph.auth.signedIn.collectAsStateWithLifecycle(initialValue = null)
 
     // A stored key is re-checked before anything routes, so every screen
@@ -93,6 +102,15 @@ fun HubNavHost(graph: DataGraph) {
     }
 
     CompositionLocalProvider(LocalLandscapeArtworkLoader provides artworkLoader) {
+        val openTitle: (MediaItem) -> Unit = { item ->
+            // Retaining the clicked card lets the destination paint its
+            // backdrop immediately, while the heavier detail record catches
+            // up from Room/network.
+            detailSeed = item.copy(
+                backdropUrl = item.backdropUrl ?: artworkCache[item.key]?.backdropUrl,
+            )
+            navController.navigate(Routes.detail(item.type, item.tmdbId))
+        }
         NavHost(
             navController = navController,
             startDestination = if (signedIn == true) Routes.HOME else Routes.LOGIN,
@@ -111,7 +129,7 @@ fun HubNavHost(graph: DataGraph) {
         composable(Routes.HOME) {
             HomeScreen(
                 graph = graph,
-                onOpenTitle = { item -> navController.navigate(Routes.detail(item.type, item.tmdbId)) },
+                onOpenTitle = openTitle,
                 onOpenSearch = { navController.navigate(Routes.SEARCH) },
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
@@ -139,7 +157,7 @@ fun HubNavHost(graph: DataGraph) {
         composable(Routes.SEARCH) {
             SearchScreen(
                 graph = graph,
-                onOpenTitle = { item -> navController.navigate(Routes.detail(item.type, item.tmdbId)) }
+                onOpenTitle = openTitle,
             )
         }
 
@@ -157,6 +175,9 @@ fun HubNavHost(graph: DataGraph) {
                 graph = graph,
                 type = type,
                 tmdbId = tmdbId,
+                initialBackdropUrl = detailSeed
+                    ?.takeIf { it.type == type && it.tmdbId == tmdbId }
+                    ?.backdropUrl,
                 onBack = { navController.popBackStack() },
                 onPlay = { season, episode ->
                     navController.navigate(Routes.player(type, tmdbId, season, episode))
@@ -164,7 +185,12 @@ fun HubNavHost(graph: DataGraph) {
                 onSelectSource = { season, episode ->
                     navController.navigate(Routes.player(type, tmdbId, season, episode, select = true))
                 },
-                onOpenTitle = { item -> navController.navigate(Routes.detail(item.type, item.tmdbId)) },
+                onOffline = { season, episode ->
+                    navController.navigate(
+                        Routes.player(type, tmdbId, season, episode, offline = true),
+                    )
+                },
+                onOpenTitle = openTitle,
             )
         }
 
@@ -176,6 +202,7 @@ fun HubNavHost(graph: DataGraph) {
                 navArgument("season") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("episode") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("select") { type = NavType.BoolType; defaultValue = false },
+                navArgument("offline") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { entry ->
             val args = entry.arguments
@@ -186,6 +213,7 @@ fun HubNavHost(graph: DataGraph) {
                 season = args?.getInt("season")?.takeIf { it > 0 },
                 episode = args?.getInt("episode")?.takeIf { it > 0 },
                 manualSelect = args?.getBoolean("select") ?: false,
+                downloadOffline = args?.getBoolean("offline") ?: false,
                 onBack = { navController.popBackStack() },
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
             )

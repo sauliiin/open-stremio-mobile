@@ -36,11 +36,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Where a title's playable links come from.
  *
- * The result is deliberately not a menu. Nothing in this app ever shows the
- * user a list of sources to choose between: `candidates` returns them already
- * ranked, and the player walks that order until one plays. Which mirror or
- * release ends up on screen is an implementation detail of getting the film
- * playing, not a question worth interrupting someone with.
+ * `candidates` returns direct links already deduplicated and ranked. Automatic
+ * playback walks that order; the offline path first filters it by advertised
+ * size and validates the smaller subset before it ever asks for a manual pick.
  */
 class StreamsRepository(
     private val api: StremioApi,
@@ -70,7 +68,9 @@ class StreamsRepository(
         .build()
 
     /**
-     * Ranked, deduplicated, playable-only — delivered as they are verified.
+     * Ranked, deduplicated, playable-only — healthy probes first, uncertain
+     * probes retained as fallback because some debrid servers reject ranges
+     * and then stream correctly when the real player opens them.
      *
      * A flow rather than a list, and that is the whole point. The previous
      * version probed every mirror in parallel and then waited for the *slowest*
@@ -172,11 +172,8 @@ class StreamsRepository(
 
         if (ranked.isNotEmpty()) {
             // The best-ranked candidate goes out unprobed, immediately.
-            // Actually opening it in the player is a stricter test than a range
-            // request anyway, so making it wait behind a probe only adds that
-            // probe's timeout to the one case that matters most — and debrid
-            // endpoints in particular routinely refuse a two-byte request,
-            // then stream fine.
+            // Actually opening it in the player is a stricter test than a
+            // range request anyway, so automatic playback should not wait.
             send(ranked.first())
             sendProbed(ranked.drop(1))
         }
@@ -229,7 +226,36 @@ class StreamsRepository(
                     .header("Range", "bytes=0-1")
                     .apply { stream.headers.forEach { (key, value) -> header(key, value) } }
                     .build()
-                probeClient.newCall(request).execute().use { it.code < 400 }
+                probeClient.newCall(request).execute().use { response ->
+                    if (response.code >= 400) return@use false
+
+                    // A removed link often returns HTTP 200 with an HTML/JSON
+                    // notice. Treating only the status as validation is what
+                    // allowed those rows into the picker.
+                    val contentType = response.header("Content-Type")
+                        ?.substringBefore(';')
+                        ?.trim()
+                        ?.lowercase()
+                    if (contentType == "text/html" || contentType == "application/json") {
+                        return@use false
+                    }
+
+                    // Progressive removal notices may still be real videos.
+                    // Their actual file is tiny compared with the size the
+                    // addon advertised for the film, and a range response
+                    // exposes that total without downloading the file.
+                    val expectedBytes = stream.sizeBytes
+                    val actualBytes = response.header("Content-Range")
+                        ?.substringAfterLast('/')
+                        ?.toLongOrNull()
+                        ?: response.body.contentLength().takeIf { response.code == 200 && it > 0 }
+                    val adaptiveManifest = contentType?.contains("mpegurl") == true ||
+                        contentType == "application/dash+xml" ||
+                        url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
+                        url.substringBefore('?').endsWith(".mpd", ignoreCase = true)
+                    adaptiveManifest || expectedBytes == null || actualBytes == null ||
+                        actualBytes >= expectedBytes * MIN_EXPECTED_SIZE_FRACTION
+                }
             }.getOrDefault(false)
         }
     }
@@ -362,6 +388,7 @@ class StreamsRepository(
         const val PROBE_TIMEOUT_MS = 3_500L
         const val SUBTITLE_TIMEOUT_MS = 15_000L
         const val PROBE_CONCURRENCY = 16
+        const val MIN_EXPECTED_SIZE_FRACTION = 0.25
 
         /**
          * How long the first wave is allowed to gather before the best of it

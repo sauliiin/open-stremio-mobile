@@ -10,16 +10,20 @@ import com.mdblisthub.tv.core.model.MediaDetail
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.model.MediaType
 import com.mdblisthub.tv.core.model.PersonSummary
+import com.mdblisthub.tv.core.model.PlayableStream
 import com.mdblisthub.tv.core.model.ScrobbleTarget
 import com.mdblisthub.tv.core.model.SubtitleOption
 import com.mdblisthub.tv.core.model.WikipediaLookup
 import com.mdblisthub.tv.player.NO_TRACK
+import com.mdblisthub.tv.player.OfflineDownloads
+import com.mdblisthub.tv.player.OfflineMetadata
 import com.mdblisthub.tv.player.PlaybackController
 import com.mdblisthub.tv.player.PlaybackPhase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -40,6 +44,8 @@ data class PlayerUiState(
     val cast: List<CastMember> = emptyList(),
     val noAddons: Boolean = false,
     val missingImdbId: Boolean = false,
+    /** The first deeply validated <=5 GB source should be downloaded immediately. */
+    val autoOfflineSelection: Boolean = false,
 )
 
 /** The compact biography card that follows focus in the player's cast rail. */
@@ -69,10 +75,14 @@ class PlayerViewModel(
     // True when the user asked to pick a source up front, from the detail
     // screen's "select source" button, instead of letting the cascade choose.
     private val manualSelect: Boolean = false,
+    /** Selects a source for a durable download instead of opening it. */
+    private val downloadOffline: Boolean = false,
 ) : ViewModel() {
 
+    private val appContext = context.applicationContext
+
     val controller = PlaybackController(
-        context = context,
+        context = appContext,
         scope = viewModelScope,
         // Same connection pool the mirror probe used, so the handshake it paid
         // for is reused rather than repeated — see `HttpClients.playback`.
@@ -98,6 +108,8 @@ class PlayerViewModel(
 
     private var target: ScrobbleTarget? = null
     private var lastReportedProgress = 0f
+    private var playingOfflineId: String? = null
+    private var offlineDownloadStarted = false
 
     init {
         viewModelScope.launch { start() }
@@ -143,6 +155,26 @@ class PlayerViewModel(
             hydration.await()?.let { publishArtwork(it, card) }
         }
 
+        val scrobbleTarget = ScrobbleTarget(type, tmdbId, imdbId, season, episode)
+        target = scrobbleTarget
+
+        // Source-picking for a download always needs the addons. Ordinary
+        // playback checks the durable index first and can therefore start in
+        // airplane mode, before either an IMDb id or an addon is required.
+        if (!downloadOffline) {
+            val offline = OfflineDownloads.completed(type, tmdbId, season, episode)
+            if (offline != null) {
+                playingOfflineId = offline.metadata.id
+                _ui.update { it.copy(searching = false) }
+                controller.playOffline(
+                    offline,
+                    graph.playback.resumeFor(scrobbleTarget),
+                    expectedRuntimeMinutes(cachedDetail, card),
+                )
+                return
+            }
+        }
+
         if (imdbId.isNullOrBlank()) {
             // Addons are indexed by IMDb id; without one there is nothing to
             // ask, and no cascade to run.
@@ -150,8 +182,6 @@ class PlayerViewModel(
             return
         }
 
-        val scrobbleTarget = ScrobbleTarget(type, tmdbId, imdbId, season, episode)
-        target = scrobbleTarget
         val stremioId = scrobbleTarget.stremioId() ?: imdbId
 
         if (graph.addons.addons().isEmpty()) {
@@ -159,15 +189,28 @@ class PlayerViewModel(
             return
         }
 
-        val candidates = graph.streams.candidates(type, stremioId)
         val resumeAt = graph.playback.resumeFor(scrobbleTarget)
+        val runtimeMinutes = expectedRuntimeMinutes(cachedDetail, card)
+
+        if (downloadOffline) {
+            startOfflineDownloadSelection(stremioId, runtimeMinutes)
+            return
+        }
+
+        val candidates = graph.streams.candidates(
+            type,
+            stremioId,
+        )
 
         _ui.update { it.copy(searching = false) }
         controller.play(
             candidates,
             resumeAt,
-            expectedRuntimeMinutes(cachedDetail, card),
+            runtimeMinutes,
             selectManually = manualSelect,
+            // Manual selection uses the repository's normal fast discovery.
+            // Sources that fail after being picked are removed immediately.
+            validateSelectedSources = false,
         )
 
         // Subtitles are fetched after playback has been handed off: they take
@@ -176,6 +219,73 @@ class PlayerViewModel(
             val options = graph.streams.subtitles(type, stremioId)
             _ui.update { it.copy(subtitles = options) }
         }
+    }
+
+    /**
+     * Automatically picks the first real video whose advertised size is at
+     * most 5 GB. Discovery is allowed to finish before the list is partitioned,
+     * so a small source from a slower addon cannot arrive after the fallback
+     * has already opened. If none survives, every remaining source receives
+     * the same complete Media3 validation before the picker is shown.
+     */
+    private suspend fun startOfflineDownloadSelection(
+        stremioId: String,
+        runtimeMinutes: Int?,
+    ) {
+        runOfflineSourceFlow(
+            candidates = graph.streams.candidates(type, stremioId),
+            validateAutomatic = { automaticSources ->
+                _ui.update { it.copy(searching = false, autoOfflineSelection = true) }
+                controller.play(
+                    automaticSources.asFlow(),
+                    expectedRuntimeMinutes = runtimeMinutes,
+                    selectManually = true,
+                    validateSelectedSources = true,
+                    stopAfterFirstValidated = true,
+                )
+
+                controller.state.first { state ->
+                    state.availableSources.isNotEmpty() || state.phase == PlaybackPhase.FAILED
+                }.availableSources.isNotEmpty()
+            },
+            validateFallback = { fallbackSources ->
+                showManualOfflineSources(fallbackSources, runtimeMinutes)
+            },
+        )
+    }
+
+    private fun showManualOfflineSources(
+        sources: List<PlayableStream>,
+        runtimeMinutes: Int?,
+    ) {
+        _ui.update { it.copy(searching = false, autoOfflineSelection = false) }
+        controller.play(
+            sources.asFlow(),
+            expectedRuntimeMinutes = runtimeMinutes,
+            selectManually = true,
+            validateSelectedSources = true,
+            stopAfterFirstValidated = false,
+        )
+    }
+
+    /** Registers the chosen source and lets DownloadService own the long transfer. */
+    fun downloadForOffline(stream: PlayableStream): Boolean {
+        if (!downloadOffline || !stream.playable || offlineDownloadStarted) return false
+        offlineDownloadStarted = true
+        val current = _ui.value
+        OfflineDownloads.enqueue(
+            appContext,
+            OfflineMetadata(
+                type = type,
+                tmdbId = tmdbId,
+                season = season,
+                episode = episode,
+                title = current.title.ifBlank { stream.title },
+                backdropUrl = current.backdropUrl,
+                stream = stream,
+            ),
+        )
+        return true
     }
 
     /**
@@ -284,7 +394,13 @@ class PlayerViewModel(
                 when (state.phase) {
                     PlaybackPhase.PLAYING -> graph.playback.start(current, lastReportedProgress)
                     PlaybackPhase.PAUSED -> graph.playback.pause(current, lastReportedProgress)
-                    PlaybackPhase.ENDED -> graph.playback.stop(current, lastReportedProgress)
+                    PlaybackPhase.ENDED -> {
+                        playingOfflineId?.let { offlineId ->
+                            OfflineDownloads.remove(appContext, offlineId)
+                            playingOfflineId = null
+                        }
+                        graph.playback.stop(current, lastReportedProgress)
+                    }
                     else -> Unit
                 }
             }

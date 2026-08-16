@@ -37,6 +37,12 @@
     <string name="detail_watch">Assistir</string>
     <string name="detail_watch_episode">Assistir T%1$dE%2$d</string>
     <string name="detail_select_source">Selecionar Fonte</string>
+    <string name="detail_offline">Offline</string>
+    <string name="detail_offline_downloading">Offline %1$.1f%%</string>
+    <string name="detail_offline_cancel">Cancelar offline</string>
+    <string name="detail_offline_failed">Offline falhou — remover</string>
+    <string name="detail_offline_remove">Remover offline</string>
+    <string name="detail_offline_removing">Removendo offline…</string>
     <string name="detail_trailer">Trailer</string>
     <string name="detail_in_collection">Na coleção</string>
     <string name="detail_add_collection">+ Coleção</string>
@@ -158,8 +164,13 @@
     <string name="player_generic_error">Não consegui reproduzir este título.</string>
     <string name="player_pick_source">Ou escolha uma fonte manualmente</string>
     <string name="player_select_title">Escolha a fonte</string>
-    <string name="player_select_searching">Buscando fontes disponíveis…</string>
+    <string name="player_select_searching">Validando fontes disponíveis…</string>
     <string name="player_select_pick">Toque em uma fonte para assistir</string>
+    <string name="offline_select_title">Escolha a fonte para assistir offline</string>
+    <string name="offline_preparing_title">Preparando seu download</string>
+    <string name="offline_preparing_message">Buscando fontes disponíveis…</string>
+    <string name="offline_auto_starting_title">O seu download já vai começar</string>
+    <string name="offline_select_pick">Toque em uma fonte para iniciar o download</string>
     <string name="player_open_addons">Ver addons</string>
     <string name="player_back">Voltar</string>
     <string name="player_play">Tocar</string>

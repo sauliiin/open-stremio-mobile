@@ -42,7 +42,22 @@ data class PlayableStream(
     val headers: Map<String, String> = emptyMap(),
 ) {
     val playable: Boolean get() = kind == StreamKind.DIRECT && !url.isNullOrBlank()
+
+    /** Parsed advertised size, used to keep automatic offline choices bounded. */
+    val sizeBytes: Long?
+        get() {
+            val match = STREAM_SIZE.matchEntire(size?.trim().orEmpty()) ?: return null
+            val amount = match.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
+            val multiplier = if (match.groupValues[2].equals("GB", ignoreCase = true)) {
+                1024.0 * 1024.0 * 1024.0
+            } else {
+                1024.0 * 1024.0
+            }
+            return (amount * multiplier).toLong().takeIf { it > 0 }
+        }
 }
+
+private val STREAM_SIZE = Regex("""(\d+(?:[.,]\d+)?)\s*(GB|MB)""", RegexOption.IGNORE_CASE)
 
 /** The result of fanning a stream request out over every installed addon. */
 @Serializable

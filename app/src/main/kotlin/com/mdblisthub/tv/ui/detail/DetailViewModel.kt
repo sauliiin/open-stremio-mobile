@@ -10,6 +10,8 @@ import com.mdblisthub.tv.core.model.MediaDetail
 import com.mdblisthub.tv.core.model.MediaType
 import com.mdblisthub.tv.core.model.PersonSummary
 import com.mdblisthub.tv.core.model.WikipediaLookup
+import com.mdblisthub.tv.player.OfflineDownload
+import com.mdblisthub.tv.player.OfflineDownloads
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -71,6 +73,18 @@ class DetailViewModel(
         .flatMapLatest { graph.media.observeEpisodes(tmdbId, it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** A film, or the first episode of the selected season, registered offline. */
+    val offline: StateFlow<OfflineDownload?> = _season
+        .flatMapLatest { selectedSeason ->
+            OfflineDownloads.observe(
+                type = type,
+                tmdbId = tmdbId,
+                season = selectedSeason.takeIf { type == MediaType.SHOW },
+                episode = 1.takeIf { type == MediaType.SHOW },
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /**
      * Whole-title membership across all three buckets. A show's "watched"
      * marks the series, the same as the web build — mdblist has no
@@ -109,6 +123,17 @@ class DetailViewModel(
     fun selectSeason(number: Int) {
         _season.value = number
         viewModelScope.launch { graph.media.ensureEpisodes(tmdbId, number) }
+    }
+
+    fun removeOffline() {
+        val selectedSeason = _season.value
+        OfflineDownloads.remove(
+            graph.appContext,
+            type,
+            tmdbId,
+            selectedSeason.takeIf { type == MediaType.SHOW },
+            1.takeIf { type == MediaType.SHOW },
+        )
     }
 
     fun toggleWatchlist() = toggleBucket(LibraryBucket.WATCHLIST)

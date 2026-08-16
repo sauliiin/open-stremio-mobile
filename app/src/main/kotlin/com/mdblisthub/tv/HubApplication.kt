@@ -19,6 +19,7 @@ import com.mdblisthub.tv.core.data.work.ImageWarmer
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import com.mdblisthub.tv.core.network.ApiConfig
 import com.mdblisthub.tv.core.ui.theme.HubColors
+import com.mdblisthub.tv.player.OfflineDownloads
 import kotlinx.coroutines.launch
 import okio.Path.Companion.toOkioPath
 
@@ -30,6 +31,7 @@ class HubApplication : Application(), Configuration.Provider, SingletonImageLoad
     override fun onCreate() {
         super.onCreate()
         graph = DataGraph(this)
+        OfflineDownloads.initialize(this, graph.network.playbackClient)
 
         // Read before the first frame rather than collected into composition.
         // The palette is global state that composition reads on its very first

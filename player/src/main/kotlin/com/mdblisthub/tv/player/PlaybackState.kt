@@ -154,12 +154,9 @@ data class PlaybackState(
     /** Why it stopped, as a value the UI renders — see [PlaybackFailure]. */
     val error: PlaybackFailure? = null,
     /**
-     * Every candidate the cascade collected so far. Offered up once
-     * [PlaybackPhase.FAILED] is reached so the user can pick one by hand
-     * instead of being stuck on the error, or continuously while
-     * [PlaybackPhase.SELECTING] is active because the user asked to choose
-     * up front. Empty on every other phase — nothing in this app shows a
-     * list of sources while the automatic attempt still has a chance to work.
+     * Sources available for a manual choice. Offline flows put only
+     * Media3-validated real videos here; ordinary manual playback may use the
+     * repository's faster normal discovery and remove a row if it later fails.
      */
     val availableSources: List<PlayableStream> = emptyList(),
     /**
