@@ -17,7 +17,6 @@
         leanback declaration instead.
     -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="true" />
-    <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
 
     <!--

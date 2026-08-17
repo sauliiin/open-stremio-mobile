@@ -66,6 +66,13 @@ data class OfflineMetadata(
     }
 }
 
+/**
+ * `@OptIn` because [request] is a Media3 `@UnstableApi` type. It is `internal`
+ * — nothing outside this module can name it — but the class itself is public,
+ * so the opt-in has to be declared here rather than inherited from
+ * [OfflineDownloads] below.
+ */
+@OptIn(UnstableApi::class)
 data class OfflineDownload(
     val metadata: OfflineMetadata,
     val status: OfflineStatus,

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Declared by the module that needs it rather than by the app, because
+        the requirement comes from `OfflineDownloadService`'s scheduler and
+        nothing else in the app knows that.
+
+        Media3's `PlatformScheduler` registers a *persisted* JobScheduler job so
+        a film left downloading survives the process being reclaimed. Android
+        refuses to persist a job for a caller without this permission — and it
+        refuses by throwing, not by degrading, so without this line the first
+        time the service asks to be rescheduled (connectivity lost, process
+        killed mid-download) it takes the download with it.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+</manifest>

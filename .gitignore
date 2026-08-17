@@ -6,6 +6,11 @@ build/
 *.aab
 captures/
 
+# The Kotlin language server (VS Code / Eclipse) compiles into `bin/` beside
+# `src/`. It was tracked once, which meant a second, stale copy of every model
+# file sat in the repo waiting to drift out of step with the real source.
+bin/
+
 # Local machine configuration — SDK paths differ per checkout, and a committed
 # one breaks the build for everyone else.
 local.properties

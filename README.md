@@ -41,8 +41,9 @@ própria conta Firebase:
 
 1. crie um projeto Firebase e ative **Authentication > Google**, cadastrando o
    SHA-1 da chave que assina seu build (debug e/ou release);
-2. gere o `google-services.json` do seu projeto e coloque em
-   `app/google-services.json` (não commitado neste checkout público);
+2. gere o `google-services.json` do seu projeto e **substitua** o
+   `app/google-services.json` deste repositório — ele vem versionado e aponta
+   para o projeto Firebase do autor, então sem trocá-lo o login não é seu;
 3. crie o Realtime Database e ajuste `FIREBASE_BASE` em
    `core/network/.../ApiConfig.kt` caso a instância não use a URL padrão;
 4. publique regras que restrinjam cada usuário ao próprio nó — a chave MDBList
@@ -155,3 +156,12 @@ cada vez.
 Kotlin 2.4 exige R8 9.1.29 ou superior. O `settings.gradle.kts` fixa esse R8
 compatível enquanto o projeto permanece na versão do AGP declarada em
 `gradle/libs.versions.toml`.
+
+## Licença
+
+GPL-3.0 — ver [LICENSE](LICENSE).
+
+O APK distribui `player/libs/media3-decoder-ffmpeg-1.11.0.aar`, uma build local
+do módulo `decoder_ffmpeg` do Media3. O FFmpeg que ele embute é LGPL/GPL e o
+Google não o publica no Maven por causa disso; as obrigações dessa licença
+acompanham qualquer redistribuição do APK.
