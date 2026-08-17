@@ -77,6 +77,7 @@ fun PosterCard(
      * worse than one that does not react at all.
      */
     onLongClick: (() -> Unit)? = null,
+    isWatched: Boolean = false,
     /**
      * Netflixy/Primefly's touch equivalent of D-pad focus: this app has no
      * remote landing a card into "previewed but not opened" the way it does
@@ -227,6 +228,24 @@ fun PosterCard(
                         top = 6.dp,
                         bottom = if (watched != null) 18.dp else 6.dp,
                     ),
+                )
+            }
+
+
+            if (isWatched) {
+                WatchedBadge(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(
+                            end = if (HubColors.isCyberpunk) 7.dp else 8.dp,
+                            bottom = when {
+                                HubColors.isCyberpunk && watched != null -> 23.dp
+                                HubColors.isCyberpunk -> 7.dp
+                                watched != null -> 20.dp
+                                else -> 8.dp
+                            }
+                        ),
+                    size = 18.dp
                 )
             }
 

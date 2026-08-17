@@ -73,6 +73,9 @@ class DetailViewModel(
         .flatMapLatest { graph.media.observeEpisodes(tmdbId, it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val watchedEpisodes: StateFlow<Set<String>> = graph.library.observeWatchedEpisodes()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
     /** A film, or the first episode of the selected season, registered offline. */
     val offline: StateFlow<OfflineDownload?> = _season
         .flatMapLatest { selectedSeason ->

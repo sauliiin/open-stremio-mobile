@@ -184,6 +184,8 @@ fun HomeScreen(
     // invalidates is the one that actually displays the value.
     val becauseYouWatched by viewModel.becauseYouWatched.collectAsStateWithLifecycle()
     val isEditMode by viewModel.isEditMode.collectAsStateWithLifecycle()
+    val watchedIds by viewModel.watchedIds.collectAsStateWithLifecycle()
+    val watchedEpisodes by viewModel.watchedEpisodes.collectAsStateWithLifecycle()
     val initialSyncComplete by viewModel.initialSyncComplete.collectAsStateWithLifecycle()
     val mdblistLinked by graph.auth.mdblistLinked.collectAsStateWithLifecycle(initialValue = false)
     val deletedListIds by graph.session.deletedListIds.collectAsStateWithLifecycle(initialValue = emptySet())
@@ -649,6 +651,7 @@ fun HomeScreen(
                                 resumeRemovalTarget = resumePoints.getOrNull(index)
                             },
                             progressPercent = { index, _ -> resumePoints.getOrNull(index)?.progress },
+                            isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
                             requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
                             requestInitialFocus = isNormalTheme && initialNormalFocusPending && !isEditMode,
                             onInitialFocusHandled = onInitialNormalFocusHandled,
@@ -695,6 +698,7 @@ fun HomeScreen(
                                 onItemClick = onOpenTitle,
                                 onItemFocused = viewModel::onFocused,
                                 onReachedEnd = { viewModel.loadMore(list.id) },
+                                isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
                                 requestInitialFocus = requestInitialFocus,
                                 onInitialFocusHandled = onInitialNormalFocusHandled,
                             )
@@ -725,6 +729,7 @@ fun HomeScreen(
                                 onEnsure = { viewModel.ensureCatalog(catalog) },
                                 onItemClick = openCatalogItem,
                                 onItemFocused = viewModel::onFocused,
+                                isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
                                 requestInitialFocus = requestInitialFocus,
                                 onInitialFocusHandled = onInitialNormalFocusHandled,
                             )
@@ -764,6 +769,14 @@ fun HomeScreen(
                                     }
                                 },
                                 onItemFocused = viewModel::onFocused,
+                                isWatched = { itemIndex, item ->
+                                    val feedItem = feed.items.getOrNull(itemIndex)
+                                    if (feedItem?.season != null && feedItem.episode != null) {
+                                        watchedEpisodes.contains("${item.tmdbId}:${feedItem.season}:${feedItem.episode}")
+                                    } else {
+                                        watchedIds.contains(item.tmdbId)
+                                    }
+                                },
                                 requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
                                 requestInitialFocus = requestInitialFocus,
                                 onInitialFocusHandled = onInitialNormalFocusHandled,
@@ -834,6 +847,7 @@ private fun AddonCatalogRow(
     onEnsure: () -> Unit,
     onItemClick: (MediaItem) -> Unit,
     onItemFocused: (MediaItem) -> Unit,
+    isWatched: ((Int, MediaItem) -> Boolean)? = null,
     requestInitialFocus: Boolean = false,
     onInitialFocusHandled: () -> Unit = {},
 ) {
@@ -853,6 +867,7 @@ private fun AddonCatalogRow(
         onDelete = onDelete,
         onItemClick = onItemClick,
         onItemFocused = onItemFocused,
+        isWatched = isWatched,
         requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
         requestInitialFocus = requestInitialFocus,
         onInitialFocusHandled = onInitialFocusHandled,
@@ -897,6 +912,7 @@ private fun ListRow(
     onEnsure: () -> Unit,
     onItemClick: (MediaItem) -> Unit,
     onItemFocused: (MediaItem) -> Unit,
+    isWatched: ((Int, MediaItem) -> Boolean)? = null,
     onReachedEnd: () -> Unit,
     requestInitialFocus: Boolean = false,
     onInitialFocusHandled: () -> Unit = {},
@@ -919,6 +935,7 @@ private fun ListRow(
         onDelete = onDelete,
         onItemClick = onItemClick,
         onItemFocused = onItemFocused,
+        isWatched = isWatched,
         onReachedEnd = onReachedEnd,
         requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
         requestInitialFocus = requestInitialFocus,
