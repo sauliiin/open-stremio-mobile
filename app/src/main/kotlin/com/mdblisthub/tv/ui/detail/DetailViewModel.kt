@@ -57,6 +57,9 @@ class DetailViewModel(
     val detail: StateFlow<MediaDetail?> = graph.media.observeDetail(type, tmdbId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    val language: StateFlow<String> = graph.uiPreferences.language
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "en")
+
     private val _season = MutableStateFlow(1)
     val season: StateFlow<Int> = _season.asStateFlow()
 

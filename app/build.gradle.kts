@@ -19,8 +19,8 @@ android {
         applicationId = "com.openstream.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 24
-        versionName = "1.0.5.1"
+        versionCode = 25
+        versionName = "1.0.6"
 
         // x86 (32-bit) is back on the list deliberately: the emulator this
         // app is tested on reports exactly that ABI, and without a native
@@ -82,6 +82,7 @@ dependencies {
     implementation(projects.core.data)
     implementation(projects.core.ui)
     implementation(projects.player)
+    implementation(files("../player/libs/media3-decoder-ffmpeg-1.11.0.aar"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
