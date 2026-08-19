@@ -38,7 +38,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
@@ -216,7 +215,9 @@ fun LoginScreen(
                             singleLine = true,
                             textStyle = MaterialTheme.typography.titleLarge.copy(color = HubColors.Text),
                             cursorBrush = SolidColor(HubColors.Accent2),
-                            visualTransformation = PasswordVisualTransformation(),
+                            // Shown in the clear. Masking it bought nothing —
+                            // this is an API key typed once, and a single wrong
+                            // character is impossible to spot behind dots.
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(
                                 onDone = { viewModel.signInWithMdblistOnly() },
@@ -283,7 +284,7 @@ fun LoginScreen(
                             singleLine = true,
                             textStyle = MaterialTheme.typography.titleLarge.copy(color = HubColors.Text),
                             cursorBrush = SolidColor(HubColors.Accent2),
-                            visualTransformation = PasswordVisualTransformation(),
+                            // Same reasoning as the mdblist-only field above.
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = { viewModel.linkMdblist() }),
                             modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),

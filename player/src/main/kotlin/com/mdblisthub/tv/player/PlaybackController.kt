@@ -1,6 +1,7 @@
 package com.mdblisthub.tv.player
 
 import android.content.Context
+import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -125,13 +126,38 @@ class PlaybackController(
     private val upstreamFactory: DataSource.Factory =
         DefaultDataSource.Factory(context.applicationContext, httpDataSourceFactory)
 
+    /**
+     * Hoisted out of [dataSourceFactory] because [prefetcher] needs the same
+     * instance: `SimpleCache` throws if two of them are pointed at one
+     * directory, and a prefetcher filling a *different* cache from the one the
+     * player reads is worse than no prefetcher at all.
+     */
+    private val mediaCache = MediaCache.get(context)
+
     private val dataSourceFactory: DataSource.Factory =
-        MediaCache.get(context)?.let { cache ->
+        mediaCache?.let { cache ->
             CacheDataSource.Factory()
                 .setCache(cache)
                 .setUpstreamDataSourceFactory(upstreamFactory)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         } ?: upstreamFactory
+
+    /**
+     * Keeps the disk cache filled ahead of the playhead — the deep buffer that
+     * used to have to live in the Java heap.
+     *
+     * Null when no cache could be opened, which is the same condition that
+     * makes [dataSourceFactory] stream straight through: with nowhere to write,
+     * there is nothing to work ahead into.
+     */
+    private val prefetcher = mediaCache?.let { cache ->
+        MediaPrefetcher(
+            cache = cache,
+            upstreamFactory = upstreamFactory,
+            scope = scope,
+            maxWindowBytes = (MediaCache.budgetBytes * PREFETCH_CACHE_SHARE).toLong(),
+        )
+    }
 
     /**
      * The first line of defence against a source going quiet, and the one that
@@ -216,12 +242,16 @@ class PlaybackController(
                         // extra 1.5s on every start and 3s on every rebuffer,
                         // paid for a benefit that was never being missed.
                         /* bufferForPlaybackMs = */ DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                        // Deliberately above the 2s default: resuming from a
-                        // rebuffer with almost nothing in hand is what turns
-                        // one stall into a run of them. Only this one is
-                        // raised — `bufferForPlaybackMs` stays at the default
-                        // so the *first* frame is still fast.
-                        /* bufferForPlaybackAfterRebufferMs = */ 8_000,
+                        // Above the 2s default, but no longer by the same
+                        // amount everywhere — see the function, which drops it
+                        // on constrained boxes. Refilling 8s of a high-bitrate
+                        // remux over a weak radio can outlast the outage it is
+                        // recovering from, and the picture stays stopped for
+                        // the whole of it. Only this one varies;
+                        // `bufferForPlaybackMs` stays at the default so the
+                        // *first* frame is still fast.
+                        /* bufferForPlaybackAfterRebufferMs = */
+                        HeapBudget.bufferForPlaybackAfterRebufferMs(context.applicationContext),
                     )
                     // `DefaultAllocator` takes its `byte[]` from the *Java*
                     // heap, not native memory, so this is bounded by what the
@@ -335,6 +365,12 @@ class PlaybackController(
 
     private var watchdog: Job? = null
     private var ticker: Job? = null
+
+    /**
+     * Supervises a source that is *already playing*. [watchdog] deliberately
+     * stops at the moment this one starts — see [startStallWatch].
+     */
+    private var stallWatch: Job? = null
 
     /** Set by the screen; see [setOsdVisible]. Starts true, since the OSD does. */
     private var osdVisible = true
@@ -651,6 +687,13 @@ class PlaybackController(
         }
 
         val url = stream.url ?: return
+
+        // Stopped before the headers move, not after. The prefetcher builds its
+        // requests from the same shared factory, so a chunk still in flight
+        // when this line runs would finish under the *next* candidate's headers
+        // — and write whatever that host returned into the previous file's
+        // cache key.
+        prefetcher?.stop()
 
         // Replaced wholesale rather than merged: the factory is shared across
         // every attempt, so a header the previous mirror needed would
@@ -1065,7 +1108,9 @@ class PlaybackController(
         }
         failoverPositionMs = null
         failoverPlayWhenReady = null
+        updatePrefetch()
         startTicker()
+        startStallWatch()
     }
 
     /**
@@ -1144,6 +1189,12 @@ class PlaybackController(
         watchdog = null
         ticker?.cancel()
         ticker = null
+        stallWatch?.cancel()
+        stallWatch = null
+        // Nothing left to work ahead of. Without this the loop survives the
+        // film, polling every couple of seconds against a window that is
+        // permanently full, for as long as the ENDED screen is up.
+        prefetcher?.stop()
         _state.update { it.copy(phase = PlaybackPhase.ENDED) }
     }
 
@@ -1192,6 +1243,8 @@ class PlaybackController(
     private fun fail(failure: PlaybackFailure) {
         watchdog?.cancel()
         ticker?.cancel()
+        stallWatch?.cancel()
+        prefetcher?.stop()
         runCatching { player.stop() }
         _state.update {
             it.copy(
@@ -1235,6 +1288,108 @@ class PlaybackController(
      * rate while nothing displays the position is pure cost — and on a set-top
      * box it is cost paid against the same frame budget the video decode needs.
      */
+    /**
+     * Points the prefetcher at the committed source and tells it where the
+     * playhead is.
+     *
+     * Called from [onReady] and from every position tick, because neither is
+     * sufficient alone: `STATE_READY` is where a source becomes committed but
+     * can arrive before the duration is demuxed, and the tick has the duration
+     * but no idea when the source changed. `MediaPrefetcher.start` is a no-op
+     * once it is already running for the same file, so calling it on every tick
+     * costs a string comparison.
+     *
+     * Reads `player` on the main thread only; the prefetcher gets plain values.
+     */
+    private fun updatePrefetch() {
+        val prefetcher = prefetcher ?: return
+        val stream = committedStream ?: return
+        val url = stream.url ?: return
+        prefetcher.start(
+            uri = Uri.parse(url),
+            // Must match what `open` puts on the MediaItem, or the two write
+            // to different keys and every prefetched byte is downloaded twice.
+            cacheKey = stream.filename?.takeIf { it.isNotBlank() },
+            durationMs = player.duration,
+        )
+        prefetcher.onPosition(
+            positionMs = player.currentPosition.coerceAtLeast(0L),
+            playerBufferedMs = player.totalBufferedDuration,
+            playerLoading = player.isLoading,
+        )
+    }
+
+    /**
+     * Catches the stall that never becomes an error.
+     *
+     * [watchdog] covers the opposite half of a source's life: it decides
+     * whether a candidate is worth waiting for, and [onReady] cancels it
+     * precisely because a link that has produced a picture has proven itself.
+     * From there until the film ends nothing was watching — and the failure
+     * this repairs lives entirely in that gap.
+     *
+     * A mirror behind a weak radio rarely *closes* the connection when it
+     * gives up; it simply stops sending. Nothing about that is an error, so
+     * the engine goes on waiting for a socket that will never deliver another
+     * byte, and the only thing that ends the wait is the load-level retry
+     * ladder above, one read timeout at a time. From the sofa (or the couch,
+     * or the bus) that is a picture frozen for a long stretch. And the reason
+     * seeking "fixes" it is not that the position was wrong: a seek closes the
+     * dead socket and opens a new one, which is the one thing a waiting player
+     * will not do for itself.
+     *
+     * So this does it instead, and sooner. A frozen [Player.getBufferedPosition]
+     * is the honest signal — a source that is merely slow still advances it,
+     * however slowly, while one that has gone quiet cannot move it at all — and
+     * the repair is [reopenCommitted], the same one the error path already
+     * trusts, at the same position, with the disk cache underneath making the
+     * refill cheap.
+     */
+    private fun startStallWatch() {
+        stallWatch?.cancel()
+        stallWatch = scope.launch {
+            var frozenMs = 0L
+            var lastBuffered = C.TIME_UNSET
+
+            while (isActive) {
+                delay(STALL_POLL_MS)
+
+                // Paused is not stalled, and neither is anything the cascade is
+                // still deciding about. `committedStream` is what separates
+                // them — without one there is nothing for [reopenCommitted] to
+                // reopen, and the attempt watchdog owns that phase anyway.
+                val waiting = committedStream != null &&
+                    player.playWhenReady &&
+                    player.playbackState == Player.STATE_BUFFERING
+
+                val buffered = player.bufferedPosition
+                if (!waiting || buffered != lastBuffered) {
+                    lastBuffered = buffered
+                    frozenMs = 0L
+                    continue
+                }
+
+                frozenMs += STALL_POLL_MS
+                if (frozenMs < STALL_FROZEN_MS) continue
+
+                // Cleared before the reopen rather than after: `open` returns
+                // long before the new source produces anything, and the next
+                // poll must not measure staleness against a buffer position
+                // that belongs to the connection just abandoned.
+                frozenMs = 0L
+                lastBuffered = C.TIME_UNSET
+
+                // Resumes from here. The counter inside `reopenCommitted` is
+                // what stops a link that is genuinely gone from being reopened
+                // forever: after COMMITTED_RETRY_LIMIT of them the cascade
+                // takes over, which is the right answer once a source has
+                // stopped responding that many times in a row.
+                rememberPlaybackForFailover()
+                reopenCommitted()
+            }
+        }
+    }
+
     private fun startTicker() {
         ticker?.cancel()
         ticker = scope.launch {
@@ -1246,6 +1401,7 @@ class PlaybackController(
     }
 
     private fun publishPosition() {
+        updatePrefetch()
         _state.update {
             it.copy(
                 positionMs = player.currentPosition.coerceAtLeast(0),
@@ -1469,12 +1625,15 @@ class PlaybackController(
     fun progressPercent(): Float = _state.value.progress * 100f
 
     private fun stopInternal() {
+        prefetcher?.stop()
         watchdog?.cancel()
         ticker?.cancel()
+        stallWatch?.cancel()
         candidatesJob?.cancel()
         subtitleTicker?.cancel()
         watchdog = null
         ticker = null
+        stallWatch = null
         candidatesJob = null
         subtitleTicker = null
         candidatesCollecting = false
@@ -1547,6 +1706,44 @@ class PlaybackController(
         const val IDLE_TICK_MS = 4_000L
 
         const val SUBTITLE_TICK_MS = 120L
+
+        /**
+         * Share of the disk cache the read-ahead window may occupy.
+         *
+         * The rest is left for what has already been watched. Both directions
+         * come out of one `LeastRecentlyUsedCacheEvictor`, so this is the line
+         * between "rewind is free" and "the next several minutes are already
+         * here" — and taking all of it for the second would make a backward
+         * seek re-download every time.
+         *
+         * Weighted three-to-one toward read-ahead because the two sides are not
+         * worth the same. Behind the playhead, a quarter of a large cache is
+         * already many minutes of instant rewind, and the cost of missing is a
+         * re-download the viewer waits a moment for. Ahead of it, the cost of
+         * missing is the picture stopping.
+         */
+        const val PREFETCH_CACHE_SHARE = 0.75
+
+        /**
+         * How often a committed source is checked for a frozen buffer.
+         *
+         * Two field reads on the main thread, so the cost is nil, and a second
+         * is fine enough that quantisation is a rounding error against
+         * [STALL_FROZEN_MS].
+         */
+        const val STALL_POLL_MS = 1_000L
+
+        /**
+         * How long `bufferedPosition` may stand perfectly still, while the
+         * viewer is waiting for a picture, before the link is reopened.
+         *
+         * Two bounds decide this. Long enough that a source still trickling is
+         * never touched — any byte demuxed moves the buffer and resets the
+         * count, so this can only fire on a link delivering literally nothing.
+         * Short enough to land well inside the read timeout it exists to
+         * pre-empt, since waiting for that timeout is the freeze being fixed.
+         */
+        const val STALL_FROZEN_MS = 10_000L
 
         /** How far off the runtime estimate may be before a resume is corrected. */
         const val RESUME_TOLERANCE_MS = 5_000L

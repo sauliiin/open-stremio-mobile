@@ -340,4 +340,8 @@
     <string name="addons_import_report_count">%1$d of %2$d addon(s) from the account imported.</string>
     <string name="addons_import_arrived">Imported: %1$s.</string>
     <string name="addons_mdblist_key_hint">Enter your MDBList API key to load your lists.</string>
+    <string name="addons_mdblist_key_edit_hint">Enter the new MDBList API key. The old one stops working as soon as this one links.</string>
+    <string name="addons_change_mdblist_key">Change key</string>
+    <string name="addons_cancel">Cancel</string>
+    <string name="settings_dim_unwatched_episodes">Blur unwatched episodes</string>
 </resources>

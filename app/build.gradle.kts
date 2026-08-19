@@ -19,8 +19,8 @@ android {
         applicationId = "com.openstream.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 25
-        versionName = "1.0.6"
+        versionCode = 26
+        versionName = "1.0.8"
 
         // x86 (32-bit) is back on the list deliberately: the emulator this
         // app is tested on reports exactly that ABI, and without a native
