@@ -11,6 +11,7 @@ import com.mdblisthub.tv.core.model.LibraryBucket
 import com.mdblisthub.tv.core.model.MediaDetail
 import com.mdblisthub.tv.core.model.MediaType
 import com.mdblisthub.tv.core.model.PersonSummary
+import com.mdblisthub.tv.core.model.ResumePoint
 import com.mdblisthub.tv.core.model.WikipediaLookup
 import com.mdblisthub.tv.player.OfflineDownload
 import com.mdblisthub.tv.player.OfflineDownloads
@@ -98,6 +99,18 @@ class DetailViewModel(
     ) { watchlist, collection, watched -> LibraryState(watchlist, collection, watched) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryState())
 
+    val resumePoint: StateFlow<ResumePoint?> = combine(
+        graph.playback.resumePoints,
+        detail,
+    ) { points, currentDetail ->
+        points.firstOrNull { point ->
+            point.type == type && (
+                (tmdbId > 0 && point.tmdbId == tmdbId) ||
+                    (currentDetail?.imdbId != null && point.imdbId == currentDetail.imdbId)
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /** Which bucket has a write in flight, so its own button disables. */
     private val _pending = MutableStateFlow<Set<LibraryBucket>>(emptySet())
     val pending: StateFlow<Set<LibraryBucket>> = _pending.asStateFlow()
@@ -139,6 +152,11 @@ class DetailViewModel(
     fun toggleWatchlist() = toggleBucket(LibraryBucket.WATCHLIST)
     fun toggleCollection() = toggleBucket(LibraryBucket.COLLECTION)
     fun toggleWatched() = toggleBucket(LibraryBucket.WATCHED)
+
+    fun clearProgress() {
+        val point = resumePoint.value ?: return
+        viewModelScope.launch { graph.playback.clear(point.toTarget()) }
+    }
 
     private fun toggleBucket(bucket: LibraryBucket) {
         val current = detail.value ?: return

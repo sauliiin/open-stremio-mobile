@@ -79,7 +79,7 @@ import com.mdblisthub.tv.core.ui.theme.HubDimens
 import com.mdblisthub.tv.core.model.MediaDetail
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import coil3.compose.AsyncImage
-import com.mdblisthub.tv.ui.component.AnimatedOpenStreamTitle
+import com.mdblisthub.tv.ui.component.AnimatedBrandTitle
 import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.hubViewModel
 import kotlinx.coroutines.flow.StateFlow
@@ -295,6 +295,19 @@ fun HomeScreen(
                 scope.launch {
                     graph.media.resolveImdb(item.type, imdbId).onSuccess { tmdbId ->
                         onOpenTitle(item.copy(tmdbId = tmdbId))
+                    }
+                }
+            }
+        }
+    }
+    val resumePlayback: (ResumePoint) -> Unit = { point ->
+        if ((point.tmdbId ?: 0) > 0) {
+            onResume(point)
+        } else {
+            point.imdbId?.let { imdbId ->
+                scope.launch {
+                    graph.media.resolveImdb(point.type, imdbId).onSuccess { tmdbId ->
+                        onResume(point.copy(tmdbId = tmdbId))
                     }
                 }
             }
@@ -684,7 +697,7 @@ fun HomeScreen(
                             onItemFocused = viewModel::onFocused,
                             key = { index, item -> resumePoints.getOrNull(index)?.key ?: item.key },
                             onItemClickIndexed = { index, _ ->
-                                resumePoints.getOrNull(index)?.let(onResume)
+                                resumeCards.getOrNull(index)?.let(openCatalogItem)
                             },
                             onItemLongClickIndexed = { index, _ ->
                                 resumeRemovalTarget = resumePoints.getOrNull(index)
@@ -799,13 +812,8 @@ fun HomeScreen(
                                     val feedItem = feed.items.getOrNull(itemIndex)
                                     "${item.key}:${feedItem?.season ?: 0}:${feedItem?.episode ?: 0}"
                                 },
-                                onItemClickIndexed = { itemIndex, item ->
-                                    val feedItem = feed.items.getOrNull(itemIndex)
-                                    if (feedItem?.season != null && feedItem.episode != null) {
-                                        onResume(feedItem.toResumePoint())
-                                    } else {
-                                        openCatalogItem(item)
-                                    }
+                                onItemClickIndexed = { _, item ->
+                                    openCatalogItem(item)
                                 },
                                 onItemFocused = viewModel::onFocused,
                                 isWatched = { itemIndex, item ->
@@ -1062,7 +1070,7 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
             verticalArrangement = Arrangement.Bottom,
         ) {
             if (item == null) {
-                AnimatedOpenStreamTitle(
+                AnimatedBrandTitle(
                     style = MaterialTheme.typography.headlineLarge,
                 )
                 return@Column
@@ -1151,7 +1159,7 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
             verticalArrangement = Arrangement.Bottom,
         ) {
             if (item == null) {
-                AnimatedOpenStreamTitle(
+                AnimatedBrandTitle(
                     style = MaterialTheme.typography.headlineLarge,
                 )
                 return@Column

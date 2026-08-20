@@ -13,6 +13,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -390,7 +391,7 @@ fun PlayerScreen(
                 // Pickers and the sync panel own the remote while they are
                 // open. In particular, OK must activate their focused row —
                 // never fall through to the player's play/pause shortcut.
-                if (overlayOpen) return@onPreviewKeyEvent event.key != Key.Back
+                if (overlayOpen) return@onPreviewKeyEvent false
                 // Back has its own handler below, and it needs to be able to
                 // *hide* the OSD — which an unconditional poke() here would
                 // undo in the same keypress, since this preview handler runs
@@ -1173,6 +1174,8 @@ private fun PlayerOsd(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .focusGroup()
+            .onFocusChanged { onControlsFocusChanged(it.hasFocus) }
             .background(
                 Brush.verticalGradient(
                     listOf(HubColors.Background.copy(alpha = 0f), HubColors.Background.copy(alpha = 0.94f))
@@ -1186,7 +1189,6 @@ private fun PlayerOsd(
                 cast = cast,
                 preview = castPreview,
                 onPreview = onPreviewCast,
-                onControlsFocusChanged = onControlsFocusChanged,
                 onMoveDown = { progressBarFocusRequester.requestFocus() },
             )
         }
@@ -1224,7 +1226,6 @@ private fun PlayerOsd(
                 onClick = onTogglePlay,
                 modifier = Modifier
                     .focusRequester(playButtonFocusRequester)
-                    .onFocusChanged { onControlsFocusChanged(it.hasFocus) }
                     .onKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                         when (event.key) {
@@ -1289,7 +1290,6 @@ private fun PlayerOsd(
             modifier = Modifier
                 .fillMaxWidth()
                 .offset(y = (-4).dp)
-                .onFocusChanged { onControlsFocusChanged(it.hasFocus) }
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
                         progressBarFocusRequester.requestFocus()
@@ -1611,7 +1611,6 @@ private fun CastRail(
     cast: List<CastMember>,
     preview: PlayerCastPreviewState,
     onPreview: (CastMember) -> Unit,
-    onControlsFocusChanged: (Boolean) -> Unit,
     onMoveDown: () -> Unit,
 ) {
     val firstCastFocusRequester = remember { FocusRequester() }
@@ -1640,7 +1639,6 @@ private fun CastRail(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(66.dp)
-                .onFocusChanged { onControlsFocusChanged(it.hasFocus) }
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
                         onMoveDown()

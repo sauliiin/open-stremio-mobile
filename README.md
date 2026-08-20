@@ -1,4 +1,4 @@
-# Open Stream Mobile
+# OmniStream Mobile
 
 App nativo em Kotlin para Android (celular/tablet): player **Media3/ExoPlayer**,
 **workers dedicados** de metadados e **cache persistente** em Room.

@@ -54,7 +54,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.ui.component.HubSpinner
 import com.mdblisthub.tv.core.ui.theme.HubColors
-import com.mdblisthub.tv.ui.component.AnimatedOpenStreamTitle
+import com.mdblisthub.tv.ui.component.AnimatedBrandTitle
 import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.hubViewModel
 import kotlinx.coroutines.launch
@@ -99,7 +99,7 @@ fun LoginScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 28.dp),
         ) {
-            AnimatedOpenStreamTitle(style = MaterialTheme.typography.displayLarge)
+            AnimatedBrandTitle(style = MaterialTheme.typography.displayLarge)
 
             if (state.google == null && !mdblistOnlyMode) {
                 Text(

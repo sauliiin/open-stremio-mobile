@@ -17,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -74,6 +75,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -129,6 +132,7 @@ fun DetailScreen(
     val watchedEpisodes by viewModel.watchedEpisodes.collectAsStateWithLifecycle()
     val dimUnwatchedEpisodes by viewModel.dimUnwatchedEpisodes.collectAsStateWithLifecycle()
     val library by viewModel.library.collectAsStateWithLifecycle()
+    val resumePoint by viewModel.resumePoint.collectAsStateWithLifecycle()
     val pending by viewModel.pending.collectAsStateWithLifecycle()
     val libraryError by viewModel.libraryError.collectAsStateWithLifecycle()
     val castBio by viewModel.castBio.collectAsStateWithLifecycle()
@@ -139,6 +143,7 @@ fun DetailScreen(
     var buttonRowHadFocus by remember { mutableStateOf(false) }
     var buttonRowHasFocus by remember { mutableStateOf(false) }
     var trailerOpen by remember { mutableStateOf(false) }
+    var episodeDetails by remember { mutableStateOf<Episode?>(null) }
 
     LaunchedEffect(buttonRowHasFocus) {
         if (buttonRowHasFocus) {
@@ -188,6 +193,7 @@ fun DetailScreen(
 
     BackHandler {
         when {
+            episodeDetails != null -> episodeDetails = null
             trailerOpen -> trailerOpen = false
             castBio.member != null -> viewModel.closeCast()
             else -> onBack()
@@ -377,6 +383,13 @@ fun DetailScreen(
                             onClick = viewModel::toggleWatched,
                             modifier = Modifier.fillMaxHeight(),
                         )
+                        if (resumePoint != null) {
+                            HubButton(
+                                text = stringResource(R.string.detail_clear_progress),
+                                onClick = viewModel::clearProgress,
+                                modifier = Modifier.fillMaxHeight(),
+                            )
+                        }
                     }
 
                     libraryError?.let { failure ->
@@ -432,7 +445,10 @@ fun DetailScreen(
                         dimUnwatched = dimUnwatchedEpisodes,
                         showTmdbId = tmdbId,
                         appLanguage = appLanguage,
-                        onPlay = { ep -> onPlay(ep.seasonNumber, ep.episodeNumber) },
+                        onOpenDetails = { episodeDetails = it },
+                        onSelectSource = { ep ->
+                            onSelectSource(ep.seasonNumber, ep.episodeNumber)
+                        },
                     )
                 }
             }
@@ -482,6 +498,118 @@ fun DetailScreen(
                 },
             )
         }
+
+        episodeDetails?.let { episode ->
+            EpisodeDetailsDialog(
+                episode = episode,
+                appLanguage = appLanguage,
+                onPlay = {
+                    episodeDetails = null
+                    onPlay(episode.seasonNumber, episode.episodeNumber)
+                },
+                onSelectSource = {
+                    episodeDetails = null
+                    onSelectSource(episode.seasonNumber, episode.episodeNumber)
+                },
+                onDismiss = { episodeDetails = null },
+            )
+        }
+    }
+}
+
+@Composable
+private fun EpisodeDetailsDialog(
+    episode: Episode,
+    appLanguage: String,
+    onPlay: () -> Unit,
+    onSelectSource: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val watchFocus = remember { FocusRequester() }
+    LaunchedEffect(episode.id) { watchFocus.requestFocus() }
+    val metadata = listOfNotNull(
+        episode.airDate?.let { formatAirDate(it, appLanguage) },
+        episode.runtimeMinutes?.takeIf { it > 0 }
+            ?.let { stringResource(R.string.detail_episode_runtime, it) },
+        episode.voteAverage?.takeIf { it > 0.0 }
+            ?.let { stringResource(R.string.detail_episode_rating, it) },
+    ).joinToString("  •  ")
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 720.dp)
+                .heightIn(max = 680.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(HubColors.Surface)
+                .border(1.dp, HubColors.Border, RoundedCornerShape(18.dp))
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(190.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(HubColors.SurfaceStrong),
+            ) {
+                episode.stillUrl?.let { still ->
+                    AsyncImage(
+                        model = still,
+                        contentDescription = episode.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            Text(
+                text = stringResource(
+                    R.string.detail_episode_number,
+                    episode.seasonNumber,
+                    episode.episodeNumber,
+                ),
+                style = MaterialTheme.typography.titleMedium,
+                color = HubColors.AccentSoft,
+            )
+            Text(
+                text = episode.name,
+                style = MaterialTheme.typography.headlineMedium,
+                color = HubColors.Text,
+            )
+            if (metadata.isNotBlank()) {
+                Text(
+                    text = metadata,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HubColors.TextDim,
+                )
+            }
+            Text(
+                text = episode.overview?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.detail_episode_no_overview),
+                style = MaterialTheme.typography.bodyLarge,
+                color = HubColors.TextDim,
+            )
+            HubButton(
+                text = stringResource(
+                    R.string.detail_watch_episode,
+                    episode.seasonNumber,
+                    episode.episodeNumber,
+                ),
+                primary = true,
+                onClick = onPlay,
+                modifier = Modifier.fillMaxWidth().focusRequester(watchFocus),
+            )
+            HubButton(
+                text = stringResource(R.string.detail_select_source),
+                onClick = onSelectSource,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
@@ -493,7 +621,8 @@ private fun EpisodeRow(
     dimUnwatched: Boolean,
     showTmdbId: Int,
     appLanguage: String,
-    onPlay: (Episode) -> Unit
+    onOpenDetails: (Episode) -> Unit,
+    onSelectSource: (Episode) -> Unit,
 ) {
     if (episodes.isEmpty()) return
 
@@ -572,10 +701,12 @@ private fun EpisodeRow(
                         .clip(RoundedCornerShape(10.dp))
                         .background(background)
                         .border(borderWidth, borderColor, RoundedCornerShape(10.dp))
-                        .clickable(
+                        .combinedClickable(
                             interactionSource = interaction,
                             indication = null,
-                        ) { onPlay(episode) }
+                            onClick = { onOpenDetails(episode) },
+                            onLongClick = { onSelectSource(episode) },
+                        )
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -628,6 +759,13 @@ private fun EpisodeRow(
                         style = MaterialTheme.typography.titleMedium,
                         color = if (focused) HubColors.AccentSoft else HubColors.Text,
                         maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = stringResource(R.string.detail_episode_source_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (focused) HubColors.AccentSoft else HubColors.TextFaint,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

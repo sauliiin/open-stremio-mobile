@@ -20,6 +20,7 @@ import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.LandscapeArtwork
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.model.MediaType
+import com.mdblisthub.tv.core.model.ResumePoint
 import com.mdblisthub.tv.core.ui.component.LandscapeArtworkLoader
 import com.mdblisthub.tv.core.ui.component.LoadingScreen
 import com.mdblisthub.tv.core.ui.component.LocalLandscapeArtworkLoader
@@ -55,6 +56,15 @@ object Routes {
         offline: Boolean = false,
     ) = "player/${type.mdblist}/$tmdbId?season=${season ?: -1}&episode=${episode ?: -1}" +
         "&select=$select&offline=$offline"
+
+    /** Resume the exact movie or episode and let the viewer choose its source first. */
+    fun resume(point: ResumePoint) = player(
+        type = point.type,
+        tmdbId = point.tmdbId ?: 0,
+        season = point.season,
+        episode = point.episode,
+        select = true,
+    )
 }
 
 @Composable
@@ -157,9 +167,7 @@ fun HubNavHost(graph: DataGraph) {
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onResume = { point ->
-                    navController.navigate(
-                        Routes.player(point.type, point.tmdbId ?: 0, point.season, point.episode),
-                    )
+                    navController.navigate(Routes.resume(point))
                 },
                 onSignOut = {
                     navController.navigate(Routes.LOGIN) {
