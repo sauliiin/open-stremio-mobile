@@ -38,6 +38,7 @@ data class ReleaseInfo(
     val tag: String,
     val pageUrl: String,
     val assets: List<ReleaseAsset>,
+    val notes: String? = null,
 )
 
 sealed interface UpdateUiState {
@@ -49,8 +50,29 @@ sealed interface UpdateUiState {
         val totalBytes: Long,
     ) : UpdateUiState
     data class AwaitingInstallPermission(val release: ReleaseInfo) : UpdateUiState
-    data class Failed(val release: ReleaseInfo?, val detail: String?) : UpdateUiState
+    data class Failed(val release: ReleaseInfo?, val reason: UpdateFailureReason) : UpdateUiState
 }
+
+/**
+ * Why the self-update flow failed, as a value rather than as a sentence.
+ *
+ * Mirrors [com.mdblisthub.tv.player.PlaybackFailure]: this manager has no
+ * business knowing which language the device is set to, so it hands the UI
+ * facts, not words. `AppUpdateOverlay` turns each case into a string resource.
+ */
+sealed interface UpdateFailureReason {
+    data object NoApkAsset : UpdateFailureReason
+    data object InsecureDownload : UpdateFailureReason
+    data class UnexpectedHttpStatus(val code: Int) : UpdateFailureReason
+    data object EmptyDownload : UpdateFailureReason
+    data object ChecksumMismatch : UpdateFailureReason
+    data object CouldNotFinalize : UpdateFailureReason
+    data object Unknown : UpdateFailureReason
+}
+
+private class UpdateFailedException(val reason: UpdateFailureReason) : Exception()
+
+private fun failUpdate(reason: UpdateFailureReason): Nothing = throw UpdateFailedException(reason)
 
 /**
  * Checks the repository's latest stable GitHub release and installs its APK.
@@ -96,7 +118,7 @@ class AppUpdateManager(
         if (downloadJob?.isActive == true) return
         val asset = selectApkAsset(release.assets, Build.SUPPORTED_ABIS.toList())
         if (asset == null) {
-            _state.value = UpdateUiState.Failed(release, "No APK asset in this release")
+            _state.value = UpdateUiState.Failed(release, UpdateFailureReason.NoApkAsset)
             return
         }
 
@@ -109,7 +131,8 @@ class AppUpdateManager(
                 requestInstall(file, release)
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                _state.value = UpdateUiState.Failed(release, error.message)
+                val reason = (error as? UpdateFailedException)?.reason ?: UpdateFailureReason.Unknown
+                _state.value = UpdateUiState.Failed(release, reason)
             }
         }
     }
@@ -140,9 +163,9 @@ class AppUpdateManager(
                     Uri.parse("package:${activity.packageName}"),
                 ),
             )
-        }.onFailure { error ->
+        }.onFailure {
             waitingForInstallPermission = false
-            _state.value = UpdateUiState.Failed(release, error.message)
+            _state.value = UpdateUiState.Failed(release, UpdateFailureReason.Unknown)
         }
     }
 
@@ -187,8 +210,8 @@ class AppUpdateManager(
             pendingFile = null
             pendingRelease = null
             _state.value = UpdateUiState.Hidden
-        }.onFailure { error ->
-            _state.value = UpdateUiState.Failed(release, error.message)
+        }.onFailure {
+            _state.value = UpdateUiState.Failed(release, UpdateFailureReason.Unknown)
         }
     }
 
@@ -208,6 +231,7 @@ class AppUpdateManager(
             ReleaseInfo(
                 tag = response.tagName,
                 pageUrl = response.htmlUrl,
+                notes = formatReleaseNotes(response.body),
                 assets = response.assets
                     .filter { it.name.endsWith(".apk", ignoreCase = true) }
                     .map { asset ->
@@ -227,7 +251,7 @@ class AppUpdateManager(
     }
 
     private suspend fun download(release: ReleaseInfo, asset: ReleaseAsset): File {
-        require(asset.downloadUrl.startsWith("https://")) { "Refusing a non-HTTPS download" }
+        if (!asset.downloadUrl.startsWith("https://")) failUpdate(UpdateFailureReason.InsecureDownload)
         updateDirectory.mkdirs()
         val safeTag = release.tag.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val destination = File(updateDirectory, "open-stremio-$safeTag.apk")
@@ -238,8 +262,8 @@ class AppUpdateManager(
         }
 
         try {
-            require(connection.responseCode in 200..299) {
-                "Download returned HTTP ${connection.responseCode}"
+            if (connection.responseCode !in 200..299) {
+                failUpdate(UpdateFailureReason.UnexpectedHttpStatus(connection.responseCode))
             }
             val total = connection.contentLengthLong.takeIf { it > 0L } ?: asset.size
             var downloaded = 0L
@@ -260,14 +284,14 @@ class AppUpdateManager(
                     }
                 }
             }
-            require(downloaded > 0L) { "Downloaded APK is empty" }
+            if (downloaded <= 0L) failUpdate(UpdateFailureReason.EmptyDownload)
             asset.sha256?.let { expected ->
-                require(sha256(partial).equals(expected, ignoreCase = true)) {
-                    "Downloaded APK failed SHA-256 verification"
+                if (!sha256(partial).equals(expected, ignoreCase = true)) {
+                    failUpdate(UpdateFailureReason.ChecksumMismatch)
                 }
             }
             if (destination.exists()) destination.delete()
-            require(partial.renameTo(destination)) { "Could not finalize downloaded APK" }
+            if (!partial.renameTo(destination)) failUpdate(UpdateFailureReason.CouldNotFinalize)
             return destination
         } finally {
             connection.disconnect()
@@ -313,6 +337,20 @@ internal fun compareVersions(remote: String, local: String): Int? {
 internal fun isNewerVersion(remote: String, local: String): Boolean =
     compareVersions(remote, local)?.let { it > 0 } ?: false
 
+/** Turns the common GitHub Release Markdown into readable Compose text. */
+internal fun formatReleaseNotes(markdown: String?): String? = markdown
+    ?.replace(Regex("(?s)<!--.*?-->"), "")
+    ?.replace(Regex("""(?m)^[ \t]{0,3}#{1,6}[ \t]*"""), "")
+    ?.replace(Regex("""!\[([^]]*)]\([^)]+\)"""), "$1")
+    ?.replace(Regex("""\[([^]]+)]\([^)]+\)"""), "$1")
+    ?.replace(Regex("""(?m)^[ \t]*[-*+][ \t]+"""), "• ")
+    ?.replace("**", "")
+    ?.replace("__", "")
+    ?.replace("`", "")
+    ?.replace(Regex("\n{3,}"), "\n\n")
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+
 private fun versionParts(version: String): List<Int>? {
     val parts = Regex("\\d+").findAll(version).mapNotNull { it.value.toIntOrNull() }.toList()
     return parts.takeIf { it.isNotEmpty() }
@@ -335,6 +373,7 @@ private fun sha256(file: File): String {
 private data class GitHubReleaseResponse(
     @SerialName("tag_name") val tagName: String,
     @SerialName("html_url") val htmlUrl: String,
+    val body: String? = null,
     val assets: List<GitHubAssetResponse> = emptyList(),
 )
 

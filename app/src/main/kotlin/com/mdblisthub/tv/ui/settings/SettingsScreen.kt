@@ -71,7 +71,10 @@ val ALL_LANGUAGES = listOf(
     "hi" to "हिन्दी",
     "tr" to "Türkçe",
     "pl" to "Polski",
-    "nl" to "Nederlands"
+    "nl" to "Nederlands",
+    "hr" to "Hrvatski",
+    "sr" to "Српски",
+    "bs" to "Bosanski"
 )
 
 data class SettingsUiState(
@@ -270,7 +273,11 @@ fun SettingsScreen(graph: DataGraph, onBack: () -> Unit) {
         item(key = "interface") {
             SettingsCard(title = stringResource(R.string.settings_section_interface)) {
                 SettingsRow(label = stringResource(R.string.settings_language)) {
-                    val langs = listOf("pt" to stringResource(R.string.lang_pt), "en" to stringResource(R.string.lang_en))
+                    val langs = listOf(
+                        "pt" to stringResource(R.string.lang_pt),
+                        "en" to stringResource(R.string.lang_en),
+                        "es" to stringResource(R.string.lang_es),
+                    )
                     langs.forEach { (code, name) ->
                         HubButton(
                             text = name,

@@ -6,4 +6,5 @@
     <string name="row_show">Show list</string>
     <string name="row_hide">Hide list</string>
     <string name="row_delete">Delete list</string>
+    <string name="watched_badge_description">Watched</string>
 </resources>

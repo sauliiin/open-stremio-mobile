@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mdblisthub.tv.core.ui.R
@@ -30,7 +31,7 @@ fun WatchedBadge(
     ) {
         Image(
             painter = painterResource(id = R.drawable.ic_watched),
-            contentDescription = "Watched",
+            contentDescription = stringResource(R.string.watched_badge_description),
             colorFilter = ColorFilter.tint(HubColors.Accent),
             modifier = Modifier.fillMaxSize()
         )
