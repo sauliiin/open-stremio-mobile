@@ -9,7 +9,7 @@
   <p>
     <img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android 7.0 ou superior">
     <img src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin e Jetpack Compose">
-    <img src="https://img.shields.io/badge/version-1.1.3-25C2A0?style=flat-square" alt="Versão 1.1.3">
+    <img src="https://img.shields.io/badge/version-1.1.5-25C2A0?style=flat-square" alt="Versão 1.1.5">
     <img src="https://img.shields.io/badge/license-GPL--3.0-8B5CF6?style=flat-square" alt="Licença GPL-3.0">
   </p>
 
