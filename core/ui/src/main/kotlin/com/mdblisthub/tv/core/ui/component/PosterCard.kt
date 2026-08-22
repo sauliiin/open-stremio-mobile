@@ -5,6 +5,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -27,7 +28,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.animation.core.animateFloat
@@ -35,6 +38,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.asAndroidPath
@@ -43,8 +50,11 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -75,9 +85,11 @@ fun PosterCard(
      * Held OK, the one secondary gesture a remote has. Null leaves the card
      * with a plain click, which is what every row but "continue watching"
      * wants — a card that reacts to being held without doing anything is
-     * worse than one that does not react at all.
+     * worse than one that does not react at all. Receives the card's own
+     * on-screen bounds so the caller can hand them to [PosterActionOverlay]
+     * as the start frame of its zoom.
      */
-    onLongClick: (() -> Unit)? = null,
+    onLongClick: ((PosterCardAnchor) -> Unit)? = null,
     isWatched: Boolean = false,
     /**
      * Netflixy/Primefly's touch equivalent of D-pad focus: this app has no
@@ -135,6 +147,20 @@ fun PosterCard(
         if (focused) onFocused(item)
     }
 
+    val artworkUrl = if (HubColors.isPrimefly) {
+        // Never crop a portrait poster into a landscape card.
+        resolvedArtwork?.landscapeUrl
+            ?: item.landscapeUrl
+            ?: resolvedArtwork?.backdropUrl
+            ?: item.backdropUrl
+    } else {
+        item.posterUrl
+    }
+
+    // Only tracked for the long-press hand-off below; a card with no
+    // `onLongClick` never reads it, so this costs it nothing.
+    var cardBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
+
     Column(
         modifier = modifier.width(HubDimens.PosterWidth),
         verticalArrangement = Arrangement.spacedBy(if (HubColors.isPrimefly) 4.dp else 8.dp),
@@ -144,6 +170,7 @@ fun PosterCard(
             Modifier
                 .width(HubDimens.PosterWidth)
                 .height(HubDimens.PosterHeight)
+                .onGloballyPositioned { cardBoundsInRoot = it.boundsInRoot() }
                 .let {
                     if (HubColors.isCyberpunk && focused) {
                         it.animatedCyberpunkGlow(shape = RoundedCornerShape(cornerRadius))
@@ -153,7 +180,12 @@ fun PosterCard(
                 .background(HubColors.Surface)
                 .let {
                     if (!HubColors.isCyberpunk || !focused) {
-                        it.border(width = borderWidth, color = borderColor, shape = RoundedCornerShape(cornerRadius))
+                        it.posterFocusDepth(
+                            shape = RoundedCornerShape(cornerRadius),
+                            borderWidth = borderWidth,
+                            borderColor = borderColor,
+                            focused = focused,
+                        )
                     } else it
                 }
                 .let {
@@ -163,6 +195,17 @@ fun PosterCard(
                 // remote's centre key into a click; adding `focusable` beside
                 // it would register two focus targets for one card.
                 .let { base ->
+                    val longClickHandler = onLongClick?.let { handler ->
+                        {
+                            handler(
+                                PosterCardAnchor(
+                                    boundsInRoot = cardBoundsInRoot,
+                                    cornerRadius = cornerRadius,
+                                    imageUrl = artworkUrl,
+                                ),
+                            )
+                        }
+                    }
                     when {
                         requireDoubleTapToOpen -> base.combinedClickable(
                             interactionSource = interaction,
@@ -172,9 +215,9 @@ fun PosterCard(
                                 onFocused(item)
                                 onClick()
                             },
-                            onLongClick = onLongClick,
+                            onLongClick = longClickHandler,
                         )
-                        onLongClick == null -> base.clickable(
+                        longClickHandler == null -> base.clickable(
                             interactionSource = interaction,
                             indication = null,
                             onClick = {
@@ -189,20 +232,11 @@ fun PosterCard(
                                 onFocused(item)
                                 onClick()
                             },
-                            onLongClick = onLongClick,
+                            onLongClick = longClickHandler,
                         )
                     }
                 },
         ) {
-            val artworkUrl = if (HubColors.isPrimefly) {
-                // Never crop a portrait poster into a landscape card.
-                resolvedArtwork?.landscapeUrl
-                    ?: item.landscapeUrl
-                    ?: resolvedArtwork?.backdropUrl
-                    ?: item.backdropUrl
-            } else {
-                item.posterUrl
-            }
             if (artworkUrl != null) {
                 AsyncImage(
                     model = artworkUrl,
@@ -288,6 +322,49 @@ fun PosterCard(
 
 /** Shared by every focus-driven property on the card, so they move as one. */
 private fun <T> posterFocusTween() = tween<T>(durationMillis = 200, easing = FastOutSlowInEasing)
+
+/**
+ * The depth cue a focused card gets in place of scaling (see the doc comment
+ * on [PosterCard] for why scale was tried and dropped): a top-heavy border
+ * gradient plus a soft diagonal sheen across the artwork, both keyed to the
+ * same focus progress so they fade in and out together instead of snapping.
+ */
+@Composable
+private fun Modifier.posterFocusDepth(
+    shape: Shape,
+    borderWidth: Dp,
+    borderColor: Color,
+    focused: Boolean,
+): Modifier {
+    val progress = animateFloatAsState(
+        targetValue = if (focused) 1f else 0f,
+        animationSpec = posterFocusTween(),
+        label = "poster-depth-sheen",
+    )
+    return this
+        .border(
+            width = borderWidth,
+            brush = Brush.verticalGradient(
+                listOf(borderColor, borderColor.copy(alpha = borderColor.alpha * 0.5f)),
+            ),
+            shape = shape,
+        )
+        .drawWithCache {
+            val sheenHeight = size.height * 0.42f
+            val sheen = Brush.linearGradient(
+                colors = listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+                start = Offset.Zero,
+                end = Offset(size.width * 0.55f, sheenHeight),
+            )
+            onDrawWithContent {
+                drawContent()
+                val alpha = progress.value
+                if (alpha > 0f) {
+                    drawRect(brush = sheen, size = Size(size.width, sheenHeight), alpha = alpha)
+                }
+            }
+        }
+}
 
 /**
  * Hoisted out of [ScoreBadge]: `forLanguageTag` parses the tag every call, and

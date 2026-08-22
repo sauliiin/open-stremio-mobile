@@ -36,6 +36,7 @@ import com.mdblisthub.tv.core.ui.component.LandscapeArtworkLoader
 import com.mdblisthub.tv.core.ui.component.LoadingScreen
 import com.mdblisthub.tv.core.ui.component.LocalLandscapeArtworkLoader
 import com.mdblisthub.tv.core.ui.component.BottomNavBar
+import com.mdblisthub.tv.core.ui.component.PosterActionOverlay
 import com.mdblisthub.tv.core.ui.component.RailItem
 import com.mdblisthub.tv.core.ui.component.rememberHubNavBarScrollState
 import com.mdblisthub.tv.ui.addons.AddonsScreen
@@ -310,6 +311,7 @@ fun HubNavHost(graph: DataGraph) {
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
+        PosterActionOverlay()
         }
     }
 }

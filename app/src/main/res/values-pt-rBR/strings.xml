@@ -147,8 +147,6 @@
 
     <!-- Home: continuar assistindo -->
     <string name="home_resume_row">Continuar assistindo</string>
-    <string name="home_resume_remove_title">Remover de continuar assistindo?</string>
-    <string name="home_resume_remove_body">"%1$s" sai da fileira e a posição salva é apagada na sua conta MDBList.</string>
     <string name="home_because_you_watched">Porque você assistiu %1$s</string>
     <string name="home_type_show">Série</string>
     <string name="home_type_movie">Filme</string>

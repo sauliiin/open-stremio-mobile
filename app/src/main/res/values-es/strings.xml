@@ -147,8 +147,6 @@
 
     <!-- Home: continuar viendo -->
     <string name="home_resume_row">Continuar viendo</string>
-    <string name="home_resume_remove_title">¿Quitar de continuar viendo?</string>
-    <string name="home_resume_remove_body">"%1$s" sale de la fila y su posición guardada se borra en tu cuenta de MDBList.</string>
     <string name="home_because_you_watched">Porque viste %1$s</string>
     <string name="home_type_show">Serie</string>
     <string name="home_type_movie">Película</string>

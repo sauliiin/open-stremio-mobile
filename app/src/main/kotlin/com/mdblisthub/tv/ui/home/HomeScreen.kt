@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -68,6 +69,9 @@ import com.mdblisthub.tv.core.ui.component.FanartBackdrop
 import com.mdblisthub.tv.core.ui.component.HubGlassCard
 import com.mdblisthub.tv.core.ui.component.HubSkeletonBlock
 import com.mdblisthub.tv.core.ui.component.MediaRow
+import com.mdblisthub.tv.core.ui.component.PosterActionOverlayHost
+import com.mdblisthub.tv.core.ui.component.PosterOverlayAction
+import com.mdblisthub.tv.core.ui.component.PosterOverlayRequest
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
 import com.mdblisthub.tv.core.ui.theme.HubTokens
@@ -309,54 +313,13 @@ fun HomeScreen(
     var renameTarget by remember { mutableStateOf<EditableListTarget?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<EditableListTarget?>(null) }
-    var resumeRemovalTarget by remember { mutableStateOf<ResumePoint?>(null) }
+    val resumeRemoveLabel = stringResource(R.string.home_delete)
     val emptyStateFocusRequester = remember { FocusRequester() }
     val normalFirstRowOffsetPx = with(LocalDensity.current) { 32.dp.toPx() }
     val rowPivotScroll = remember(HubColors.variant, normalFirstRowOffsetPx) {
         RowPivotScroll(HubColors.variant, normalFirstRowOffsetPx)
     }
     val onInitialNormalFocusHandled = { initialNormalFocusPending = false }
-
-    resumeRemovalTarget?.let { point ->
-        Dialog(onDismissRequest = { resumeRemovalTarget = null }) {
-            HubGlassCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 560.dp),
-                strong = true,
-            ) {
-                Column(
-                    modifier = Modifier.padding(HubTokens.Space.xxl),
-                    verticalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
-                ) {
-                    Text(
-                        stringResource(R.string.home_resume_remove_title),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = HubColors.Text,
-                    )
-                    Text(
-                        stringResource(R.string.home_resume_remove_body, point.title),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = HubColors.TextDim,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        HubButton(
-                            text = stringResource(R.string.home_delete),
-                            primary = true,
-                            onClick = {
-                                viewModel.removeResumePoint(point)
-                                resumeRemovalTarget = null
-                            },
-                        )
-                        HubButton(
-                            text = stringResource(R.string.home_cancel),
-                            onClick = { resumeRemovalTarget = null },
-                        )
-                    }
-                }
-            }
-        }
-    }
 
     renameTarget?.let { target ->
         Dialog(onDismissRequest = { renameTarget = null }) {
@@ -647,8 +610,23 @@ fun HomeScreen(
                             onItemClickIndexed = { index, _ ->
                                 resumeCards.getOrNull(index)?.let(openCatalogItem)
                             },
-                            onItemLongClickIndexed = { index, _ ->
-                                resumeRemovalTarget = resumePoints.getOrNull(index)
+                            onItemLongClickIndexed = { index, _, anchor ->
+                                resumePoints.getOrNull(index)?.let { point ->
+                                    PosterActionOverlayHost.show(
+                                        PosterOverlayRequest(
+                                            anchor = anchor,
+                                            title = point.title,
+                                            actions = listOf(
+                                                PosterOverlayAction(
+                                                    label = resumeRemoveLabel,
+                                                    icon = Icons.Default.Delete,
+                                                    isDestructive = true,
+                                                    onSelected = { viewModel.removeResumePoint(point) },
+                                                ),
+                                            ),
+                                        ),
+                                    )
+                                }
                             },
                             progressPercent = { index, _ -> resumePoints.getOrNull(index)?.progress },
                             isWatched = { _, item -> watchedIds.contains(item.tmdbId) },

@@ -29,6 +29,7 @@ dependencies {
     api(libs.coil.network.okhttp)
     api(libs.haze)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.activity.compose)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)
 }

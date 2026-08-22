@@ -132,7 +132,7 @@ fun MediaRow(
      */
     onItemClickIndexed: ((Int, MediaItem) -> Unit)? = null,
     /** Held OK on a card — see [PosterCard]. Indexed for the same reason as above. */
-    onItemLongClickIndexed: ((Int, MediaItem) -> Unit)? = null,
+    onItemLongClickIndexed: ((Int, MediaItem, PosterCardAnchor) -> Unit)? = null,
     progressPercent: ((Int, MediaItem) -> Float?)? = null,
     isWatched: ((Int, MediaItem) -> Boolean)? = null,
     /** See [PosterCard]'s parameter of the same name. */
@@ -249,7 +249,7 @@ fun MediaRow(
                         progressPercent = progressPercent?.invoke(index, item),
                         isWatched = isWatched?.invoke(index, item) ?: false,
                         onLongClick = onItemLongClickIndexed?.let { handler ->
-                            { handler(index, item) }
+                            { anchor -> handler(index, item, anchor) }
                         },
                         requireDoubleTapToOpen = requireDoubleTapToOpen,
                         modifier = Modifier.focusProperties { canFocus = !isEditMode },
