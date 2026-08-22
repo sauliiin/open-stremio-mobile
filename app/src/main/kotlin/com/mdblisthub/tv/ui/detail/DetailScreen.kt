@@ -49,6 +49,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -79,6 +81,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -95,11 +98,12 @@ import com.mdblisthub.tv.core.model.Review
 import com.mdblisthub.tv.core.model.ReviewProvider
 import com.mdblisthub.tv.core.ui.component.FanartBackdrop
 import com.mdblisthub.tv.core.ui.component.HubSpinner
-import com.mdblisthub.tv.core.ui.component.LoadingScreen
+import com.mdblisthub.tv.core.ui.component.HubSkeletonBlock
 import com.mdblisthub.tv.core.ui.component.MediaRow
 import com.mdblisthub.tv.core.ui.component.RatingBadges
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 import com.mdblisthub.tv.player.OfflineStatus
 import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.component.text
@@ -204,7 +208,23 @@ fun DetailScreen(
     if (current == null) {
         Box(Modifier.fillMaxSize()) {
             FanartBackdrop(url = initialBackdropUrl, scrim = 0.86f)
-            LoadingScreen(message = stringResource(R.string.loading_fetching))
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxWidth(0.78f)
+                    .padding(horizontal = HubDimens.ScreenPaddingHorizontal),
+                verticalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
+            ) {
+                HubSkeletonBlock(Modifier.fillMaxWidth(0.52f).height(72.dp), HubTokens.Radius.lg)
+                HubSkeletonBlock(Modifier.fillMaxWidth(0.42f).height(22.dp), HubTokens.Radius.sm)
+                HubSkeletonBlock(Modifier.fillMaxWidth().height(92.dp), HubTokens.Radius.md)
+                HubSkeletonBlock(Modifier.fillMaxWidth(0.64f).height(HubTokens.Size.touchTarget), HubTokens.Radius.full)
+                Text(
+                    text = stringResource(R.string.loading_fetching),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HubColors.TextDim,
+                )
+            }
         }
         return
     }
@@ -218,7 +238,7 @@ fun DetailScreen(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(HubDimens.RowSpacing),
             contentPadding = PaddingValues(
-                top = HubDimens.ScreenPaddingVertical * 2,
+                top = HubTokens.Space.giant + HubDimens.ScreenPaddingVertical * 2,
                 bottom = HubDimens.ScreenPaddingVertical * 2,
             ),
         ) {
@@ -475,6 +495,27 @@ fun DetailScreen(
                 }
             }
         }
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(
+                    start = HubDimens.ScreenPaddingHorizontal,
+                    top = HubDimens.ScreenPaddingVertical,
+                )
+                .size(HubTokens.Size.touchTarget)
+                .clip(CircleShape)
+                .background(HubColors.Surface.copy(alpha = HubTokens.Opacity.glassStrong))
+                .border(1.dp, HubColors.Border, CircleShape)
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = stringResource(R.string.player_back),
+                tint = HubColors.Text,
+            )
         }
 
         castBio.member?.let { member ->

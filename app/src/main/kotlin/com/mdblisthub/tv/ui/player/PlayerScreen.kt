@@ -1521,7 +1521,16 @@ private fun TimelinePlayButton(
             .scale(scale)
             .size(50.dp)
             .clip(CircleShape)
-            .background(if (focused) Color.White else HubColors.Accent)
+            .background(
+                Brush.linearGradient(
+                    if (focused) {
+                        listOf(Color.White, HubColors.AccentSoft)
+                    } else {
+                        listOf(HubColors.Accent, HubColors.Accent2)
+                    },
+                ),
+            )
+            .border(1.dp, Color.White.copy(alpha = if (focused) 0.78f else 0.22f), CircleShape)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

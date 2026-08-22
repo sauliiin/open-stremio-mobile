@@ -2,6 +2,13 @@ package com.mdblisthub.tv.navigation
 import androidx.compose.ui.res.stringResource
 import com.mdblisthub.tv.R
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -11,9 +18,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mdblisthub.tv.core.data.DataGraph
@@ -24,6 +35,9 @@ import com.mdblisthub.tv.core.model.ResumePoint
 import com.mdblisthub.tv.core.ui.component.LandscapeArtworkLoader
 import com.mdblisthub.tv.core.ui.component.LoadingScreen
 import com.mdblisthub.tv.core.ui.component.LocalLandscapeArtworkLoader
+import com.mdblisthub.tv.core.ui.component.BottomNavBar
+import com.mdblisthub.tv.core.ui.component.RailItem
+import com.mdblisthub.tv.core.ui.component.rememberHubNavBarScrollState
 import com.mdblisthub.tv.ui.addons.AddonsScreen
 import com.mdblisthub.tv.ui.detail.DetailScreen
 import com.mdblisthub.tv.ui.home.HomeScreen
@@ -35,6 +49,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 
 object Routes {
     const val LOGIN = "login"
@@ -144,9 +160,42 @@ fun HubNavHost(graph: DataGraph) {
             )
             navController.navigate(Routes.detail(item.type, item.tmdbId))
         }
+        val currentEntry by navController.currentBackStackEntryAsState()
+        val currentRoute = currentEntry?.destination?.route
+        val rootRoutes = remember {
+            setOf(Routes.HOME, Routes.SEARCH, Routes.ADDONS, Routes.SETTINGS)
+        }
+        val showRootNavigation = currentRoute in rootRoutes
+        val navBarState = rememberHubNavBarScrollState()
+        val navBarHazeState = rememberHazeState()
+        val rootItems = listOf(
+            RailItem(Routes.HOME, stringResource(R.string.menu_home), Icons.Default.Home),
+            RailItem(Routes.SEARCH, stringResource(R.string.menu_search), Icons.Default.Search),
+            RailItem(Routes.ADDONS, stringResource(R.string.menu_addons), Icons.Default.Extension),
+            RailItem(Routes.SETTINGS, stringResource(R.string.menu_settings), Icons.Default.Settings),
+        )
+
+        LaunchedEffect(currentRoute) {
+            if (showRootNavigation) navBarState.expand()
+        }
+
+        fun navigateRoot(route: String) {
+            if (currentRoute == route) return
+            navController.navigate(route) {
+                popUpTo(Routes.HOME) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+
+        Box(Modifier.fillMaxSize()) {
         NavHost(
             navController = navController,
             startDestination = start,
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (showRootNavigation) Modifier.hazeSource(navBarHazeState) else Modifier)
+                .then(if (showRootNavigation) Modifier.nestedScroll(navBarState.nestedScrollConnection) else Modifier),
         ) {
         composable(Routes.LOGIN) {
             LoginScreen(
@@ -163,16 +212,9 @@ fun HubNavHost(graph: DataGraph) {
             HomeScreen(
                 graph = graph,
                 onOpenTitle = openTitle,
-                onOpenSearch = { navController.navigate(Routes.SEARCH) },
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
-                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onResume = { point ->
                     navController.navigate(Routes.resume(point))
-                },
-                onSignOut = {
-                    navController.navigate(Routes.LOGIN) {
-                        popUpTo(Routes.HOME) { inclusive = true }
-                    }
                 },
             )
         }
@@ -182,7 +224,15 @@ fun HubNavHost(graph: DataGraph) {
         }
 
         composable(Routes.SETTINGS) {
-            SettingsScreen(graph = graph, onBack = { navController.popBackStack() })
+            SettingsScreen(
+                graph = graph,
+                onBack = { navController.popBackStack() },
+                onSignOut = {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(Routes.HOME) { inclusive = true }
+                    }
+                },
+            )
         }
 
         composable(Routes.SEARCH) {
@@ -247,6 +297,17 @@ fun HubNavHost(graph: DataGraph) {
                 downloadOffline = args?.getBoolean("offline") ?: false,
                 onBack = { navController.popBackStack() },
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
+            )
+        }
+        }
+        if (showRootNavigation) {
+            BottomNavBar(
+                items = rootItems,
+                selectedKey = currentRoute.orEmpty(),
+                onSelect = { navigateRoot(it.key) },
+                scrollState = navBarState,
+                hazeState = navBarHazeState,
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
         }

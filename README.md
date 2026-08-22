@@ -1,167 +1,120 @@
-# OmniStream Mobile
+<div align="center">
+  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="108" alt="Logo do OmniStream">
+  <h1>OmniStream Mobile</h1>
+  <p>
+    <strong>Sua biblioteca, suas fontes e seu progresso em uma experiência Android nativa.</strong><br>
+    Filmes e séries com uma interface rápida, moderna e feita para toque.
+  </p>
 
-App nativo em Kotlin para Android (celular/tablet): player **Media3/ExoPlayer**,
-**workers dedicados** de metadados e **cache persistente** em Room.
+  <p>
+    <img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android 7.0 ou superior">
+    <img src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin e Jetpack Compose">
+    <img src="https://img.shields.io/badge/version-1.1.3-25C2A0?style=flat-square" alt="Versão 1.1.3">
+    <img src="https://img.shields.io/badge/license-GPL--3.0-8B5CF6?style=flat-square" alt="Licença GPL-3.0">
+  </p>
 
-Este projeto é um fork **touch-first** do app irmão para Android TV — mesma
-base de código e arquitetura, com a camada de interface refeita para toque em
-vez de D-pad. Ele não depende do app de TV nem o modifica; são dois projetos
-Gradle independentes, cada um com seu próprio `applicationId`, para poder
-instalar os dois lado a lado no mesmo aparelho sem conflito.
+  <p>
+    <a href="https://github.com/sauliiin/open-stremio-mobile/releases"><strong>Baixar APK</strong></a>
+    ·
+    <a href="#build-do-código-fonte">Build do código-fonte</a>
+    ·
+    <a href="LICENSE">Licença</a>
+  </p>
+</div>
 
-### O que muda em relação ao app de TV
+---
 
-- **Navegação por toque**: o rail lateral que só aparecia com foco de D-pad foi
-  substituído por uma barra de navegação inferior, sempre visível, com no
-  máximo 5 ícones por vez (o restante fica a um swipe de distância).
-- **Tipografia e grade de pôsteres** redimensionadas para tela de celular, em
-  vez do dimensionamento "de sofá" do app de TV.
-- **Retrato e paisagem** têm layouts próprios para os temas com painel de
-  destaque (Netflixy/Primefly): a altura do painel, do logo e o tamanho dos
-  pôsteres se ajustam à orientação para sempre sobrar pelo menos uma fileira
-  de cards visível e tocável.
-- **Um toque mostra a sinopse, dois toques abrem o título** nesses mesmos
-  temas — o equivalente por toque ao que o foco de D-pad faz no app de TV.
-- **Seleção de tema** vive em Configurações, não mais num botão de ciclo na
-  navegação.
+## Streaming do seu jeito
+
+O OmniStream organiza sua biblioteca, metadados, avaliações, legendas e progresso em uma única experiência. Conecte seus próprios addons Stremio, use listas MDBList como addons locais e deixe o player escolher automaticamente a melhor fonte disponível.
+
+> [!NOTE]
+> O OmniStream não fornece, hospeda ou vende conteúdo. As fontes e os serviços conectados são configurados pelo próprio usuário.
+
+## Interface
+
+<p align="center">
+  <img src="docs/screenshots/home.png" width="23%" alt="Tela inicial do OmniStream">
+  &nbsp;
+  <img src="docs/screenshots/detail.png" width="23%" alt="Detalhes de uma série no OmniStream">
+  &nbsp;
+  <img src="docs/screenshots/addons.png" width="23%" alt="Gerenciamento de addons no OmniStream">
+  &nbsp;
+  <img src="docs/screenshots/settings.png" width="23%" alt="Configurações do OmniStream">
+</p>
+
+## Destaques
+
+- **Interface touch-first:** navegação inferior flutuante e translúcida, animações sutis, hierarquia clara e layouts próprios para retrato e paisagem.
+- **Biblioteca cache-first:** o Room entrega conteúdo imediatamente e os workers atualizam listas, metadados, imagens e progresso em segundo plano.
+- **Addons flexíveis:** importe sua conta Stremio, adicione manifests manualmente, sincronize entre aparelhos ou transforme listas MDBList em addons locais.
+- **Player resiliente:** Media3/ExoPlayer testa fontes em sequência, faz fallback automático e permite seleção manual quando você quiser.
+- **Tudo em um só lugar:** avaliações de múltiplos serviços, temporadas, episódios, elenco, legendas, reprodução offline e integração com Trakt.
+- **Identidade personalizável:** temas Normal, Cyberpunk, Netflixy e Primefly, com interface em português, inglês e espanhol.
+
+## Instalação
+
+O OmniStream requer **Android 7.0 (API 24)** ou superior.
+
+1. Abra a página de [releases](https://github.com/sauliiin/open-stremio-mobile/releases).
+2. Baixe o APK da arquitetura do seu aparelho ou escolha o `universal` se não souber qual usar.
+3. Permita a instalação de apps dessa fonte e instale o APK.
+
+## Build do código-fonte
+
+Você precisa do **JDK 17+**, Android SDK e um `local.properties` apontando para o SDK local.
 
 ```bash
-./gradlew assembleDebug     # APKs por ABI em app/build/outputs/apk/debug
-./gradlew assembleRelease   # com R8; poucos MB por ABI
+./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
-Precisa de JDK 17+ e do Android SDK. O `local.properties` (não versionado)
-deve apontar para o seu SDK local.
+Os APKs separados por ABI e o APK universal são gerados em `app/build/outputs/apk/`.
 
-### Firebase e login Google
+<details>
+<summary><strong>Configurar Firebase e login Google</strong></summary>
 
-O login é feito via Firebase Authentication (Google) mais uma chave pessoal da
-MDBList, vinculada depois da primeira entrada. Para rodar este projeto com sua
-própria conta Firebase:
+O login usa Firebase Authentication com Google. Para rodar o app com sua própria infraestrutura:
 
-1. crie um projeto Firebase e ative **Authentication > Google**, cadastrando o
-   SHA-1 da chave que assina seu build (debug e/ou release);
-2. gere o `google-services.json` do seu projeto e **substitua** o
-   `app/google-services.json` deste repositório — ele vem versionado e aponta
-   para o projeto Firebase do autor, então sem trocá-lo o login não é seu;
-3. crie o Realtime Database e ajuste `FIREBASE_BASE` em
-   `core/network/.../ApiConfig.kt` caso a instância não use a URL padrão;
-4. publique regras que restrinjam cada usuário ao próprio nó — a chave MDBList
-   fica em `/users/{uid}/profile` e só o próprio UID deve poder lê-la; a
-   sincronização de addons usa `/users/{uid}/addons` sob a mesma regra.
+1. Crie um projeto Firebase, ative **Authentication > Google** e cadastre o SHA-1 da chave de assinatura dos builds debug e/ou release.
+2. Gere o `google-services.json` do seu projeto e substitua `app/google-services.json`. O arquivo versionado aponta para o projeto do autor e não deve ser usado como backend de terceiros.
+3. Crie o Realtime Database e ajuste `FIREBASE_BASE` em `core/network/.../ApiConfig.kt` caso a instância use outra URL.
+4. Restrinja cada usuário ao próprio nó nas regras. A chave MDBList fica em `/users/{uid}/profile` e a sincronização de addons em `/users/{uid}/addons`.
 
----
+</details>
 
-## Por que nativo
+<details>
+<summary><strong>Arquitetura</strong></summary>
 
-Três coisas que uma versão empacotada em WebView não conseguia fazer, e que
-motivaram o projeto (herdadas do app de TV, valem igual aqui):
+| Módulo | Responsabilidade |
+| --- | --- |
+| `:core:model` | Tipos de domínio em Kotlin puro |
+| `:core:network` | Retrofit/OkHttp para MDBList, TMDB, OMDb e Stremio |
+| `:core:database` | Room como fonte da verdade da interface |
+| `:core:data` | Repositórios cache-first, sessão e workers |
+| `:core:ui` | Design system em Compose |
+| `:player` | Media3/ExoPlayer, buffer, failover, áudio e legendas |
+| `:app` | Telas, navegação e grafo de objetos |
 
-1. **Reprodução de vídeo.** O Media3 lida nativamente com HLS, DASH e os
-   containers/codecs suportados pelo aparelho, com buffer adaptado a links de
-   addons — sem depender do comportamento irregular de um `<video>` de WebView.
-2. **Cold start.** A home vem do Room no primeiro frame, e a rede nunca está
-   no caminho crítico.
-3. **CORS.** As escritas de watchlist precisam de um proxy no navegador porque
-   o mdblist responde 405 ao preflight OPTIONS. Um cliente nativo não tem essa
-   regra.
+O projeto não usa framework de injeção de dependência. O grafo está centralizado no [`DataGraph`](core/data/src/main/kotlin/com/mdblisthub/tv/core/data/DataGraph.kt).
 
----
+O app também é independente do projeto irmão para Android TV: os dois possuem projetos Gradle e `applicationId` próprios, podendo ser instalados lado a lado.
 
-## Módulos
+</details>
 
-```
-:core:model      Tipos de domínio. Kotlin puro, sem Android.
-:core:network    Retrofit/OkHttp: mdblist, TMDB, OMDb, Stremio. Cache de disco HTTP.
-:core:database   Room. É a fonte da verdade de tudo que a tela lê.
-:core:data       Repositórios cache-first, sessão em DataStore, workers.
-:core:ui         Design system compartilhado (Compose + androidx.tv), com
-                 dimensões e tipografia recalibradas para toque.
-:player          Media3/ExoPlayer, buffer, failover, áudio e legendas.
-:app             Telas, navegação, grafo de objetos.
-```
+<details>
+<summary><strong>Player, cache e tarefas em segundo plano</strong></summary>
 
-Sem framework de DI. O grafo é raso o bastante para caber em construtores —
-veja [`DataGraph`](core/data/src/main/kotlin/com/mdblisthub/tv/core/data/DataGraph.kt).
+Ao iniciar uma reprodução, o app consulta os addons instalados em paralelo e encaminha as fontes ao [`PlaybackController`](player/src/main/kotlin/com/mdblisthub/tv/player/PlaybackController.kt). Uma fonte só é considerada válida quando o Media3 chega a `STATE_READY`; falhas avançam automaticamente para a próxima opção.
 
----
+O Room mantém cards e detalhes em tabelas separadas para que sincronizações grandes não invalidem metadados caros. `ListSyncWorker`, `MetadataWorker`, `ArtworkWorker`, `ResumeSyncWorker` e `CachePruneWorker` mantêm os dados atualizados sem colocar a rede no caminho crítico da interface.
 
-## O player nunca pergunta qual fonte usar (a não ser que você peça)
+</details>
 
-Ao dar play, o app pergunta a todos os addons instalados em paralelo e entrega
-as fontes verificadas ao
-[`PlaybackController`](player/src/main/kotlin/com/mdblisthub/tv/player/PlaybackController.kt)
-assim que cada uma chega. Ele tenta a fila automaticamente; uma fonte morta,
-token expirado ou erro de demux avança para a próxima sem interromper o usuário.
+## Open source
 
-Sucesso exige o Media3 chegar a `STATE_READY`, não apenas aceitar uma URL. Se
-todas as opções falharem, a mesma fila aparece para escolha manual. Também é
-possível pedir a seleção manual desde o início pelo botão "Selecionar Fonte"
-na ficha do título, em vez de esperar a cascata automática falhar.
+Distribuído sob a licença **GPL-3.0**. Consulte [LICENSE](LICENSE).
 
-Tudo isso acontece atrás de um véu com o fanart do título. Nove mirrors podem
-ser testados e descartados sem que nada apareça além de "Preparando a
-reprodução…".
+A linguagem visual moderna incorpora padrões adaptados do projeto GPL-3.0 [NuvioMobile](https://github.com/NuvioMedia/NuvioMobile), preservando os temas, cores e fluxos próprios do OmniStream. As atribuições estão em [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
----
-
-## Cache e workers
-
-O Room é a fonte da verdade. `observe*` sempre emite do banco, imediatamente;
-`refresh*` escreve por cima em background. Nenhuma tela espera a rede.
-
-A tabela de metadados é dividida em duas de propósito:
-
-- `media` — o card, que o sync de listas já traz de graça. Barato de escrever
-  para mil títulos de uma vez.
-- `media_detail` — a ficha: elenco, notas, artwork, temporadas. Caro, vem de três
-  APIs, e só vale a pena para títulos que alguém abre.
-
-Assim o refresh noturno reescreve todos os cards sem tocar nas fichas que um
-worker levou minutos para montar, e cada uma envelhece no seu próprio ritmo
-([`CachePolicy`](core/data/src/main/kotlin/com/mdblisthub/tv/core/data/CachePolicy.kt)).
-
-| Worker | Quando | O que faz |
-| --- | --- | --- |
-| `ListSyncWorker` | 6/6 h + ao abrir | Listas e seus itens → Room |
-| `MetadataWorker` | 4/4 h, bateria ok | Hidrata 40 fichas por passada |
-| `ArtworkWorker` | após cada sync | Pré-aquece os 8 primeiros pôsteres de cada fileira |
-| `ResumeSyncWorker` | 3/3 h | "Continuar assistindo" |
-| `CachePruneWorker` | 24/24 h | Descarta fichas órfãs |
-
-Prefetch por foco/toque **não** é WorkManager. É a
-[`MetadataPrefetcher`](core/data/src/main/kotlin/com/mdblisthub/tv/core/data/MetadataPrefetcher.kt),
-com escopo de processo: só serve nos próximos segundos, e se o usuário seguir
-adiante deve ser descartado. É o que faz abrir uma ficha parecer instantâneo.
-
----
-
-## Tamanho
-
-O player usa os codecs do Android e não carrega um motor multimídia nativo de
-dezenas de megabytes — o release fica na casa de poucos MB por ABI. Os splits
-por ABI permanecem para as pequenas bibliotecas transitivas; o APK universal é
-o caminho mais simples para sideload em aparelho desconhecido.
-
----
-
-## Versões travadas
-
-`compileSdk` está travado na plataforma instalada na máquina de build. Se os
-artefatos AndroidX de uma versão mais nova do `core`/`lifecycle` se recusarem
-a compilar contra ele, é sinal de que exigem um salto de `compileSdk` e AGP
-juntos — ajuste `gradle/libs.versions.toml` nos dois ao mesmo tempo, não um de
-cada vez.
-
-Kotlin 2.4 exige R8 9.1.29 ou superior. O `settings.gradle.kts` fixa esse R8
-compatível enquanto o projeto permanece na versão do AGP declarada em
-`gradle/libs.versions.toml`.
-
-## Licença
-
-GPL-3.0 — ver [LICENSE](LICENSE).
-
-O APK distribui `player/libs/media3-decoder-ffmpeg-1.11.0.aar`, uma build local
-do módulo `decoder_ffmpeg` do Media3. O FFmpeg que ele embute é LGPL/GPL e o
-Google não o publica no Maven por causa disso; as obrigações dessa licença
-acompanham qualquer redistribuição do APK.
+O APK inclui `player/libs/media3-decoder-ffmpeg-1.11.0.aar`. O FFmpeg incorporado está sujeito às licenças LGPL/GPL, cujas obrigações acompanham qualquer redistribuição do aplicativo.

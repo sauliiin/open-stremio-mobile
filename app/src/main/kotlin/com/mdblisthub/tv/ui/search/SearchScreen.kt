@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -45,8 +46,12 @@ import com.mdblisthub.tv.R
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.ui.component.PosterCard
+import com.mdblisthub.tv.core.ui.component.HubGlassCard
+import com.mdblisthub.tv.core.ui.component.HubScreenHeading
+import com.mdblisthub.tv.core.ui.component.HubSkeletonBlock
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 
 @Composable
 fun SearchScreen(
@@ -72,7 +77,10 @@ fun SearchScreen(
         modifier = Modifier.fillMaxSize().padding(horizontal = HubDimens.ScreenPaddingHorizontal, vertical = HubDimens.ScreenPaddingVertical),
         verticalArrangement = Arrangement.spacedBy(HubDimens.RowSpacing)
     ) {
-        Text(stringResource(R.string.search_title), style = MaterialTheme.typography.headlineMedium, color = HubColors.Text)
+        HubScreenHeading(
+            title = stringResource(R.string.search_title),
+            subtitle = stringResource(R.string.search_subtitle),
+        )
         
         SearchBar(
             query = query,
@@ -81,19 +89,41 @@ fun SearchScreen(
         )
 
         if (isLoading && results.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(stringResource(R.string.search_searching), color = HubColors.TextDim)
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(HubDimens.PosterWidth),
+                verticalArrangement = Arrangement.spacedBy(HubDimens.RowSpacing),
+                horizontalArrangement = Arrangement.spacedBy(HubDimens.CardSpacing),
+                contentPadding = PaddingValues(bottom = HubTokens.Size.contentBottomClearance),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(10) {
+                    HubSkeletonBlock(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(HubDimens.PosterHeight),
+                    )
+                }
             }
         } else if (results.isEmpty() && query.isNotBlank() && !isLoading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(stringResource(R.string.search_no_results), color = HubColors.TextDim)
+                SearchStateCard(
+                    title = stringResource(R.string.search_no_results),
+                    description = stringResource(R.string.search_try_another),
+                )
+            }
+        } else if (results.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                SearchStateCard(
+                    title = stringResource(R.string.search_start_title),
+                    description = stringResource(R.string.search_start_hint),
+                )
             }
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(HubDimens.PosterWidth),
                 verticalArrangement = Arrangement.spacedBy(HubDimens.RowSpacing),
                 horizontalArrangement = Arrangement.spacedBy(HubDimens.CardSpacing),
-                contentPadding = PaddingValues(bottom = 100.dp),
+                contentPadding = PaddingValues(bottom = HubTokens.Size.contentBottomClearance),
                 modifier = Modifier.fillMaxSize()
             ) {
                 // Keyed so that refining a query re-uses the cards for titles
@@ -121,7 +151,7 @@ private fun SearchBar(
     val isFocused by interactionSource.collectIsFocusedAsState()
 
     val borderColor by animateColorAsState(if (isFocused) HubColors.Accent else HubColors.Border)
-    val cornerRadius = if (HubColors.isCyberpunk) 0.dp else 8.dp
+    val cornerRadius = if (HubColors.isCyberpunk) 0.dp else HubTokens.Radius.lg
 
     BasicTextField(
         value = query,
@@ -133,9 +163,9 @@ private fun SearchBar(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(cornerRadius))
-            .background(HubColors.Surface)
-            .border(2.dp, borderColor, RoundedCornerShape(cornerRadius))
-            .padding(16.dp),
+            .background(HubColors.Surface.copy(alpha = HubTokens.Opacity.glassStrong))
+            .border(1.dp, borderColor, RoundedCornerShape(cornerRadius))
+            .padding(horizontal = 18.dp, vertical = 16.dp),
         decorationBox = { innerTextField ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(Icons.Default.Search, contentDescription = null, tint = if (isFocused) HubColors.Accent else HubColors.TextDim)
@@ -148,4 +178,29 @@ private fun SearchBar(
             }
         }
     )
+}
+
+@Composable
+private fun SearchStateCard(
+    title: String,
+    description: String,
+) {
+    HubGlassCard(
+        modifier = Modifier.fillMaxWidth(0.88f),
+    ) {
+        Column(
+            modifier = Modifier.padding(HubTokens.Space.xxl),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = null,
+                tint = HubColors.Accent,
+                modifier = Modifier.padding(bottom = HubTokens.Space.xs),
+            )
+            Text(title, style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = HubColors.TextDim)
+        }
+    }
 }

@@ -24,17 +24,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -70,12 +65,12 @@ import com.mdblisthub.tv.core.model.MdblistHomeFeed
 import com.mdblisthub.tv.core.model.AddonCatalog
 import com.mdblisthub.tv.core.model.ResumePoint
 import com.mdblisthub.tv.core.ui.component.FanartBackdrop
-import com.mdblisthub.tv.core.ui.component.LoadingScreen
+import com.mdblisthub.tv.core.ui.component.HubGlassCard
+import com.mdblisthub.tv.core.ui.component.HubSkeletonBlock
 import com.mdblisthub.tv.core.ui.component.MediaRow
-import com.mdblisthub.tv.core.ui.component.BottomNavBar
-import com.mdblisthub.tv.core.ui.component.RailItem
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 import com.mdblisthub.tv.core.model.MediaDetail
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import coil3.compose.AsyncImage
@@ -164,11 +159,8 @@ private class RowPivotScroll(
 fun HomeScreen(
     graph: DataGraph,
     onOpenTitle: (MediaItem) -> Unit,
-    onOpenSearch: () -> Unit,
     onOpenAddons: () -> Unit,
-    onOpenSettings: () -> Unit,
     onResume: (ResumePoint) -> Unit,
-    onSignOut: () -> Unit,
 ) {
     val viewModel = hubViewModel { HomeViewModel(graph) }
     val lists by viewModel.lists.collectAsStateWithLifecycle()
@@ -314,7 +306,6 @@ fun HomeScreen(
         }
     }
 
-    var showExitDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<EditableListTarget?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<EditableListTarget?>(null) }
@@ -328,72 +319,38 @@ fun HomeScreen(
 
     resumeRemovalTarget?.let { point ->
         Dialog(onDismissRequest = { resumeRemovalTarget = null }) {
-            Column(
+            HubGlassCard(
                 modifier = Modifier
-                    .width(560.dp)
-                    .background(HubColors.Surface, RoundedCornerShape(16.dp))
-                    .padding(28.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Text(
-                    stringResource(R.string.home_resume_remove_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = HubColors.Text,
-                )
-                Text(
-                    stringResource(R.string.home_resume_remove_body, point.title),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = HubColors.TextDim,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    HubButton(
-                        text = stringResource(R.string.home_delete),
-                        primary = true,
-                        onClick = {
-                            viewModel.removeResumePoint(point)
-                            resumeRemovalTarget = null
-                        },
-                    )
-                    HubButton(
-                        text = stringResource(R.string.home_cancel),
-                        onClick = { resumeRemovalTarget = null },
-                    )
-                }
-            }
-        }
-    }
-
-    if (showExitDialog) {
-        Dialog(onDismissRequest = { showExitDialog = false }) {
-            Box(
-                modifier = Modifier
-                    .background(
-                        HubColors.Surface, 
-                        shape = RoundedCornerShape(16.dp)
-                    )
-                    .padding(32.dp)
+                    .fillMaxWidth()
+                    .widthIn(max = 560.dp),
+                strong = true,
             ) {
                 Column(
-                    horizontalAlignment = Alignment.CenterHorizontally, 
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    modifier = Modifier.padding(HubTokens.Space.xxl),
+                    verticalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
                 ) {
                     Text(
-                        stringResource(R.string.home_exit_question),
-                        style = MaterialTheme.typography.titleLarge, 
-                        color = HubColors.Text
+                        stringResource(R.string.home_resume_remove_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = HubColors.Text,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        stringResource(R.string.home_resume_remove_body, point.title),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = HubColors.TextDim,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         HubButton(
-                            text = stringResource(R.string.home_yes),
+                            text = stringResource(R.string.home_delete),
                             primary = true,
                             onClick = {
-                                showExitDialog = false
-                                viewModel.signOut(onSignOut)
+                                viewModel.removeResumePoint(point)
+                                resumeRemovalTarget = null
                             },
                         )
                         HubButton(
-                            text = stringResource(R.string.home_no),
-                            onClick = { showExitDialog = false },
+                            text = stringResource(R.string.home_cancel),
+                            onClick = { resumeRemovalTarget = null },
                         )
                     }
                 }
@@ -403,13 +360,16 @@ fun HomeScreen(
 
     renameTarget?.let { target ->
         Dialog(onDismissRequest = { renameTarget = null }) {
-            Column(
+            HubGlassCard(
                 modifier = Modifier
-                    .width(520.dp)
-                    .background(HubColors.Surface, RoundedCornerShape(16.dp))
-                    .padding(28.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .fillMaxWidth()
+                    .widthIn(max = 520.dp),
+                strong = true,
             ) {
+                Column(
+                    modifier = Modifier.padding(HubTokens.Space.xxl),
+                    verticalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
+                ) {
                 Text(stringResource(R.string.home_rename_list), style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
                 BasicTextField(
                     value = renameValue,
@@ -444,19 +404,23 @@ fun HomeScreen(
                         onClick = { renameTarget = null },
                     )
                 }
+                }
             }
         }
     }
 
     deleteTarget?.let { target ->
         Dialog(onDismissRequest = { deleteTarget = null }) {
-            Column(
+            HubGlassCard(
                 modifier = Modifier
-                    .width(560.dp)
-                    .background(HubColors.Surface, RoundedCornerShape(16.dp))
-                    .padding(28.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .fillMaxWidth()
+                    .widthIn(max = 560.dp),
+                strong = true,
             ) {
+                Column(
+                    modifier = Modifier.padding(HubTokens.Space.xxl),
+                    verticalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
+                ) {
                 Text(stringResource(R.string.home_delete_list_question), style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
                 Text(
                     when (target) {
@@ -488,34 +452,13 @@ fun HomeScreen(
                         onClick = { deleteTarget = null },
                     )
                 }
+                }
             }
         }
     }
 
-    // Remembered because this composable recomposes on every card focus (it
-    // reads `focused` for the hero panel), and neither of these depends on
-    // that — rebuilding them per focus is pure allocation.
-    val menuSearch = stringResource(R.string.menu_search)
-    val menuAddons = stringResource(R.string.menu_addons)
     val menuLists = stringResource(R.string.menu_lists)
     val menuListsDone = stringResource(R.string.menu_lists_done)
-    val menuSettings = stringResource(R.string.menu_settings)
-    val menuExit = stringResource(R.string.menu_exit)
-
-    // No "Home" tab — this bar only ever renders on the Home screen, so a
-    // button to navigate to where the user already is would do nothing.
-    // No "theme" tab either — cycling through four palettes one tap at a
-    // time belongs to a deliberate choice, not a bottom-nav button; see the
-    // theme section in Settings.
-    val rail = remember(isEditMode, menuSearch, menuAddons, menuLists, menuListsDone, menuSettings, menuExit) {
-        listOf(
-            RailItem("search", menuSearch, Icons.Default.Search),
-            RailItem("addons", menuAddons, Icons.Default.Extension),
-            RailItem("lists", if (isEditMode) menuListsDone else menuLists, if (isEditMode) Icons.Default.Check else Icons.AutoMirrored.Filled.ViewList),
-            RailItem("settings", menuSettings, Icons.Default.Settings),
-            RailItem("exit", menuExit, Icons.AutoMirrored.Filled.Logout),
-        )
-    }
     val resumeCards = remember(resumePoints) { resumePoints.map { it.toCardItem() } }
 
     Box(Modifier.fillMaxSize()) {
@@ -561,7 +504,8 @@ fun HomeScreen(
             // never be non-empty while its superset is empty, so this branch
             // was unreachable and the message never appeared once.
             if (!initialSyncComplete && allLists.isEmpty()) {
-                LoadingScreen(message = stringResource(R.string.home_syncing))
+                HomeLoadingSkeleton()
+                return@Row
             }
 
             if (lists.isEmpty() && feeds.isEmpty() && resumePoints.isEmpty() && extraCatalogs.isEmpty()) {
@@ -604,7 +548,11 @@ fun HomeScreen(
 
             Column(Modifier.fillMaxSize()) {
                 if (isNormalTheme) {
-                    Box(Modifier.fillMaxWidth().height(76.dp)) {
+                    val configuration = LocalConfiguration.current
+                    val normalHeroHeight = if (
+                        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    ) 118.dp else 176.dp
+                    Box(Modifier.fillMaxWidth().height(normalHeroHeight)) {
                         HeroPanel(viewModel)
                     }
                 } else if (HubColors.isNetflixy || HubColors.isPrimefly) {
@@ -859,22 +807,16 @@ fun HomeScreen(
             }
         }
 
-        BottomNavBar(
-            items = rail,
-            // Nothing is ever "selected": every remaining item navigates
-            // away from Home (or, for "lists", changes what's on it) — none
-            // of them represents "you are here" the way Home itself did.
-            selectedKey = "",
-            onSelect = { item ->
-                when (item.key) {
-                    "search" -> onOpenSearch()
-                    "addons" -> onOpenAddons()
-                    "lists" -> viewModel.toggleEditMode()
-                    "settings" -> onOpenSettings()
-                    "exit" -> showExitDialog = true
-                }
-            },
-        )
+        }
+        if (homeRows.isNotEmpty() || allLists.isNotEmpty() || allFeeds.isNotEmpty() || allAddonCatalogs.isNotEmpty()) {
+            HubButton(
+                text = if (isEditMode) menuListsDone else menuLists,
+                primary = isEditMode,
+                onClick = viewModel::toggleEditMode,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 18.dp, end = HubDimens.ScreenPaddingHorizontal),
+            )
         }
     }
 }
@@ -1151,11 +1093,17 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
             }
         }
     } else {
+        val configuration = LocalConfiguration.current
+        val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = HubDimens.ScreenPaddingHorizontal)
-                .height(76.dp),
+                .fillMaxHeight()
+                .padding(
+                    start = HubDimens.ScreenPaddingHorizontal,
+                    end = HubDimens.ScreenPaddingHorizontal,
+                    bottom = if (isLandscape) 10.dp else 18.dp,
+                ),
             verticalArrangement = Arrangement.Bottom,
         ) {
             if (item == null) {
@@ -1174,6 +1122,43 @@ private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
             )
             Spacer(Modifier.height(6.dp))
             HeroMetadataRow(item = item, detail = itemDetail)
+            itemDetail?.overview?.takeIf { it.isNotBlank() }?.let { overview ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = overview,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HubColors.TextDim,
+                    maxLines = if (isLandscape) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(if (isLandscape) 0.62f else 0.88f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeLoadingSkeleton() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = HubDimens.ScreenPaddingHorizontal, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        HubSkeletonBlock(Modifier.fillMaxWidth(0.42f).height(34.dp))
+        repeat(3) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                HubSkeletonBlock(Modifier.width(150.dp).height(18.dp), cornerRadius = 6.dp)
+                Row(horizontalArrangement = Arrangement.spacedBy(HubDimens.CardSpacing)) {
+                    repeat(4) {
+                        HubSkeletonBlock(
+                            Modifier
+                                .width(HubDimens.PosterWidth)
+                                .height(HubDimens.PosterHeight),
+                        )
+                    }
+                }
+            }
         }
     }
 }

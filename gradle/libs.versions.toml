@@ -33,6 +33,7 @@ serialization = "1.11.0"
 okhttp = "5.4.0"
 retrofit = "3.0.0"
 coil = "3.5.0"
+haze = "1.7.2"
 
 # Media3/ExoPlayer — Google's own player, and the reason the engine moved off
 # mpv: its load control is built for exactly this app's workload (third-party
@@ -92,6 +93,7 @@ retrofit-serialization = { module = "com.squareup.retrofit2:converter-kotlinx-se
 
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
+haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 
 media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
 # `media3-ui` is what renders subtitles and owns the resize modes; without it

@@ -27,6 +27,7 @@ dependencies {
     api(libs.tv.material)
     api(libs.coil.compose)
     api(libs.coil.network.okhttp)
+    api(libs.haze)
     implementation(libs.androidx.core.ktx)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)

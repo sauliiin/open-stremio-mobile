@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,6 +59,9 @@ import com.mdblisthub.tv.core.model.StremioAccount
 import com.mdblisthub.tv.core.model.StremioImportReport
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
+import com.mdblisthub.tv.core.ui.theme.HubTokens
+import com.mdblisthub.tv.core.ui.component.HubGlassCard
+import com.mdblisthub.tv.core.ui.component.HubScreenHeading
 import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.component.text
 import com.mdblisthub.tv.ui.hubViewModel
@@ -475,28 +480,21 @@ fun AddonsScreen(graph: DataGraph, onBack: () -> Unit) {
         // near the top — taking this non-focusable title with it, off the
         // top of the screen, before the user ever presses a key. A fixed
         // header can't be scrolled away by a focus change it isn't part of.
-        Column(
+        HubScreenHeading(
+            title = stringResource(R.string.addons_title),
+            subtitle = stringResource(R.string.addons_intro),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = HubDimens.ScreenPaddingHorizontal)
                 .padding(top = HubDimens.ScreenPaddingVertical * 2, bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            Text(stringResource(R.string.addons_title), style = MaterialTheme.typography.displayLarge, color = HubColors.Text)
-            Text(
-                text = stringResource(R.string.addons_intro),
-                style = MaterialTheme.typography.bodyLarge,
-                color = HubColors.TextDim,
-                modifier = Modifier.widthIn(max = 940.dp).fillMaxWidth(),
-            )
-        }
+        )
 
         LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = HubDimens.ScreenPaddingHorizontal,
             end = HubDimens.ScreenPaddingHorizontal,
-            bottom = HubDimens.ScreenPaddingVertical,
+            bottom = HubTokens.Size.contentBottomClearance,
         ),
         verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
@@ -599,7 +597,10 @@ private fun StremioSyncCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = HubColors.TextDim,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 HubButton(
                     text = if (state.busy) stringResource(R.string.addons_syncing) else stringResource(R.string.addons_sync_now),
                     primary = true,
@@ -619,7 +620,7 @@ private fun StremioSyncCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = HubColors.TextDim,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(HubTokens.Space.sm)) {
                 HubTextField(
                     value = state.email,
                     onValueChange = onEmailChange,
@@ -627,7 +628,7 @@ private fun StremioSyncCard(
                     keyboardType = KeyboardType.Email,
                     imeAction = ImeAction.Next,
                     onImeAction = passwordFocusRequester::requestFocus,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 HubTextField(
                     value = state.password,
@@ -641,14 +642,14 @@ private fun StremioSyncCard(
                         signInFocusRequester.requestFocus()
                     },
                     focusRequester = passwordFocusRequester,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 HubButton(
                     text = if (state.busy) stringResource(R.string.addons_signing_in) else stringResource(R.string.addons_sign_in),
                     primary = true,
                     enabled = state.email.isNotBlank() && state.password.isNotBlank() && !state.busy,
                     onClick = onSignIn,
-                    modifier = Modifier.focusRequester(signInFocusRequester),
+                    modifier = Modifier.fillMaxWidth().focusRequester(signInFocusRequester),
                 )
             }
         }
@@ -722,7 +723,7 @@ private fun MdblistCatalogCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = HubColors.TextDim,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(HubTokens.Space.sm)) {
                 HubTextField(
                     value = state.apiKey,
                     onValueChange = onApiKeyChange,
@@ -734,19 +735,22 @@ private fun MdblistCatalogCard(
                     // already has the box.
                     imeAction = ImeAction.Done,
                     onImeAction = onLink,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 )
-                HubButton(
-                    text = if (state.busy) stringResource(R.string.addons_linking) else stringResource(R.string.addons_link_mdblist),
-                    primary = true,
-                    enabled = state.apiKey.isNotBlank() && !state.busy,
-                    onClick = onLink,
-                )
-                // Only worth offering once there was already a working key to
-                // fall back to — cancelling out of the first-ever link would
-                // just leave the card demanding one again.
-                if (state.editingKey) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
+                ) {
                     HubButton(
+                        text = if (state.busy) stringResource(R.string.addons_linking) else stringResource(R.string.addons_link_mdblist),
+                        primary = true,
+                        enabled = state.apiKey.isNotBlank() && !state.busy,
+                        onClick = onLink,
+                    )
+                    // Only worth offering once there was already a working key to
+                    // fall back to — cancelling out of the first-ever link would
+                    // just leave the card demanding one again.
+                    if (state.editingKey) HubButton(
                         text = stringResource(R.string.addons_cancel),
                         enabled = !state.busy,
                         onClick = onCancelEditKey,
@@ -754,7 +758,10 @@ private fun MdblistCatalogCard(
                 }
             }
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 HubButton(
                     text = when {
                         state.busy -> stringResource(R.string.addons_waiting)
@@ -811,7 +818,10 @@ private fun FirebaseSyncCard(
             style = MaterialTheme.typography.bodyMedium,
             color = HubColors.TextDim,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             HubButton(text = if (state.enabled) stringResource(R.string.addons_turn_off) else stringResource(R.string.addons_turn_on), enabled = !state.busy, onClick = onToggle)
             if (state.enabled) {
                 HubButton(text = stringResource(R.string.addons_pull), enabled = !state.busy, onClick = onPull)
@@ -851,7 +861,7 @@ private fun InstallCard(
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(stringResource(R.string.addons_add_manually), style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(HubTokens.Space.sm)) {
             // `weight(1f)`, not a fixed width: the button beside it is
             // measured for its natural size first, and the field takes
             // whatever is left — the same fix as the sync cards above.
@@ -865,14 +875,14 @@ private fun InstallCard(
                     keyboardController?.hide()
                     installFocusRequester.requestFocus()
                 },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
             )
             HubButton(
                 text = if (state.busy) stringResource(R.string.addons_reading) else stringResource(R.string.addons_install),
                 primary = true,
                 enabled = state.url.isNotBlank() && !state.busy,
                 onClick = onSubmit,
-                modifier = Modifier.focusRequester(installFocusRequester),
+                modifier = Modifier.fillMaxWidth().focusRequester(installFocusRequester),
             )
         }
 
@@ -909,45 +919,41 @@ private fun GettingStartedCard(
     onInstall: () -> Unit,
     onConfigure: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(HubColors.Surface.copy(alpha = 0.65f))
-            .border(1.dp, HubColors.Border, RoundedCornerShape(14.dp))
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(quick.name, style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
-            quick.host?.let {
-                Text("·  $it", style = MaterialTheme.typography.titleMedium, color = HubColors.TextFaint)
+    HubGlassCard {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(HubTokens.Space.xl),
+            verticalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(quick.name, style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
+                quick.host?.let {
+                    Text("·  $it", style = MaterialTheme.typography.titleMedium, color = HubColors.TextFaint)
+                }
             }
             quick.unconfigured?.let {
-                Spacer(Modifier.weight(1f))
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
+                        .clip(RoundedCornerShape(HubTokens.Radius.full))
                         .background(HubColors.Rotten.copy(alpha = 0.14f))
-                        .border(1.dp, HubColors.Rotten.copy(alpha = 0.4f), RoundedCornerShape(999.dp))
+                        .border(1.dp, HubColors.Rotten.copy(alpha = 0.4f), RoundedCornerShape(HubTokens.Radius.full))
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                 ) {
                     Text(text = stringResource(it), style = MaterialTheme.typography.labelSmall, color = HubColors.Rotten)
                 }
             }
-        }
-        Text(stringResource(quick.what), style = MaterialTheme.typography.bodyMedium, color = HubColors.TextDim)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (quick.url != null) {
-                HubButton(
-                    text = if (busy) stringResource(R.string.addons_installing) else stringResource(R.string.addons_install),
-                    primary = true,
-                    enabled = !busy,
-                    onClick = onInstall,
-                )
-            }
-            if (quick.configureUrl != null) {
-                HubButton(text = stringResource(R.string.addons_open_config), onClick = onConfigure)
+            Text(stringResource(quick.what), style = MaterialTheme.typography.bodyMedium, color = HubColors.TextDim)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (quick.url != null) {
+                    HubButton(
+                        text = if (busy) stringResource(R.string.addons_installing) else stringResource(R.string.addons_install),
+                        primary = true,
+                        enabled = !busy,
+                        onClick = onInstall,
+                    )
+                }
+                if (quick.configureUrl != null) {
+                    HubButton(text = stringResource(R.string.addons_open_config), onClick = onConfigure)
+                }
             }
         }
     }
@@ -966,29 +972,27 @@ private fun openUrl(context: Context, url: String) {
 
 @Composable
 private fun AddonRow(addon: Addon, onRemove: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(HubColors.Surface.copy(alpha = 0.65f))
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(addon.name, style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
-            Text(
-                text = buildString {
-                    append(addon.resources.joinToString(", ").ifBlank { stringResource(R.string.addons_no_resources_declared) })
-                    if (addon.types.isNotEmpty()) append("  ·  ${addon.types.joinToString(", ")}")
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = HubColors.TextFaint,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+    HubGlassCard {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(HubTokens.Space.lg),
+            horizontalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(addon.name, style = MaterialTheme.typography.titleLarge, color = HubColors.Text)
+                Text(
+                    text = buildString {
+                        append(addon.resources.joinToString(", ").ifBlank { stringResource(R.string.addons_no_resources_declared) })
+                        if (addon.types.isNotEmpty()) append("  ·  ${addon.types.joinToString(", ")}")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = HubColors.TextFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            HubButton(text = stringResource(R.string.addons_remove), onClick = onRemove)
         }
-        HubButton(text = stringResource(R.string.addons_remove), onClick = onRemove)
     }
 }
 
@@ -996,16 +1000,16 @@ private fun AddonRow(addon: Addon, onRemove: () -> Unit) {
 
 @Composable
 private fun SyncCard(accent: androidx.compose.ui.graphics.Color, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(accent.copy(alpha = 0.07f))
-            .border(1.dp, accent.copy(alpha = 0.26f), RoundedCornerShape(14.dp))
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        content = content,
-    )
+    HubGlassCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(accent.copy(alpha = 0.045f))
+                .padding(HubTokens.Space.xl),
+            verticalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
+            content = content,
+        )
+    }
 }
 
 private typealias ColumnScope = androidx.compose.foundation.layout.ColumnScope
@@ -1024,7 +1028,9 @@ private fun StatusPill(on: Boolean) {
             .padding(horizontal = 9.dp, vertical = 3.dp),
     ) {
         Text(
-            text = if (on) stringResource(R.string.addons_status_on) else stringResource(R.string.addons_status_off),
+            // Deliberately language-neutral: this is a compact state badge,
+            // and longer translations such as "desligado" distort the pill.
+            text = stringResource(if (on) R.string.addons_status_on else R.string.addons_status_off),
             style = MaterialTheme.typography.labelSmall,
             color = if (on) HubColors.Accent2 else HubColors.TextFaint,
         )
@@ -1054,10 +1060,10 @@ private fun HubTextField(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(HubColors.Surface)
-            .border(1.dp, HubColors.Border, RoundedCornerShape(10.dp))
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .clip(RoundedCornerShape(HubTokens.Radius.lg))
+            .background(HubColors.Surface.copy(alpha = HubTokens.Opacity.glassStrong))
+            .border(1.dp, HubColors.Border, RoundedCornerShape(HubTokens.Radius.lg))
+            .padding(horizontal = HubTokens.Space.lg, vertical = 14.dp),
     ) {
         if (value.isEmpty()) {
             Text(placeholder, style = MaterialTheme.typography.titleMedium, color = HubColors.TextFaint)

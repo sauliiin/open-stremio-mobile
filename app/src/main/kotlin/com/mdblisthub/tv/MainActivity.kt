@@ -1,8 +1,10 @@
 package com.mdblisthub.tv
 
 import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
@@ -31,7 +33,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var appUpdateManager: AppUpdateManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Every OmniStream palette is dark. The automatic edge-to-edge style
+        // follows the device theme instead, which produced black status-bar
+        // icons whenever a light-system device opened this dark app.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
 
         val graph = (application as HubApplication).graph

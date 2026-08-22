@@ -52,6 +52,7 @@ import coil3.compose.AsyncImage
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 
 /**
  * One title in a row.
@@ -90,9 +91,12 @@ fun PosterCard(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val targetBorderWidth = if (focused) {
-        if (HubColors.isCyberpunk) 4.5.dp else 2.5.dp
-    } else 0.dp
+    val targetBorderWidth = when {
+        focused && HubColors.isCyberpunk -> 4.5.dp
+        focused -> 2.5.dp
+        HubColors.isCyberpunk -> 0.dp
+        else -> HubTokens.Space.hairline
+    }
     val borderWidth by animateDpAsState(
         targetValue = targetBorderWidth,
         animationSpec = posterFocusTween(),
@@ -135,7 +139,7 @@ fun PosterCard(
         modifier = modifier.width(HubDimens.PosterWidth),
         verticalArrangement = Arrangement.spacedBy(if (HubColors.isPrimefly) 4.dp else 8.dp),
     ) {
-        val cornerRadius = if (HubColors.isCyberpunk) 0.dp else 10.dp
+        val cornerRadius = if (HubColors.isCyberpunk) 0.dp else HubTokens.Radius.md
         Box(
             Modifier
                 .width(HubDimens.PosterWidth)
@@ -293,7 +297,7 @@ private val ScoreLocale: java.util.Locale = java.util.Locale.forLanguageTag("pt-
 
 @Composable
 private fun ScoreBadge(score: Int, modifier: Modifier = Modifier) {
-    val cornerRadius = if (HubColors.isCyberpunk) 0.dp else 6.dp
+    val cornerRadius = if (HubColors.isCyberpunk) 0.dp else HubTokens.Radius.sm
     Box(
         modifier
             .size(width = 40.dp, height = 22.dp)

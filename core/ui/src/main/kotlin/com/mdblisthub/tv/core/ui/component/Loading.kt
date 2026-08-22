@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,12 +16,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.mdblisthub.tv.core.ui.theme.HubColors
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 
 @Composable
 fun HubSpinner(modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 34.dp) {
@@ -81,4 +88,45 @@ fun LoadingScreen(message: String, modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/** Shape-preserving shimmer used while artwork-backed content is warming up. */
+@Composable
+fun HubSkeletonBlock(
+    modifier: Modifier = Modifier,
+    cornerRadius: androidx.compose.ui.unit.Dp = HubTokens.Radius.md,
+) {
+    val transition = rememberInfiniteTransition(label = "skeleton")
+    val progress by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1_250, easing = LinearEasing),
+        ),
+        label = "skeleton-progress",
+    )
+    val shape = RoundedCornerShape(cornerRadius)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(HubColors.Surface.copy(alpha = 0.82f))
+            .drawWithCache {
+                val width = size.width.coerceAtLeast(1f)
+                val centre = width * progress
+                val shimmer = Brush.linearGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        HubColors.AccentSoft.copy(alpha = 0.14f),
+                        Color.White.copy(alpha = 0.08f),
+                        Color.Transparent,
+                    ),
+                    start = androidx.compose.ui.geometry.Offset(centre - width, 0f),
+                    end = androidx.compose.ui.geometry.Offset(centre, size.height),
+                )
+                onDrawWithContent {
+                    drawContent()
+                    drawRect(shimmer)
+                }
+            },
+    )
 }

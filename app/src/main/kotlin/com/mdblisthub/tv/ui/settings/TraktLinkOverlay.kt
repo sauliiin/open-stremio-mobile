@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -25,7 +24,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -41,7 +39,9 @@ import androidx.tv.material3.Text
 import com.mdblisthub.tv.R
 import com.mdblisthub.tv.core.model.TraktLinkFailure
 import com.mdblisthub.tv.core.model.TraktLinkState
+import com.mdblisthub.tv.core.ui.component.HubGlassCard
 import com.mdblisthub.tv.core.ui.theme.HubColors
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 import com.mdblisthub.tv.ui.component.HubButton
 
 /**
@@ -68,20 +68,24 @@ fun TraktLinkOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.9f))
+                .background(Color.Black.copy(alpha = HubTokens.Opacity.scrim))
                 .padding(24.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Column(
+            HubGlassCard(
                 modifier = Modifier
-                    .widthIn(max = 460.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(HubColors.Surface)
-                    .padding(28.dp)
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                    .fillMaxWidth()
+                    .widthIn(max = 460.dp),
+                strong = true,
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(HubTokens.Space.xxl)
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
+                ) {
                 Text(
                     stringResource(R.string.trakt_link_title),
                     style = MaterialTheme.typography.headlineSmall,
@@ -219,6 +223,7 @@ fun TraktLinkOverlay(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                }
             }
         }
     }

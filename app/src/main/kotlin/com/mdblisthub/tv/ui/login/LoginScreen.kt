@@ -4,6 +4,8 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import androidx.core.net.toUri
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -34,6 +37,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -53,7 +58,9 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.ui.component.HubSpinner
+import com.mdblisthub.tv.core.ui.component.HubGlassCard
 import com.mdblisthub.tv.core.ui.theme.HubColors
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 import com.mdblisthub.tv.ui.component.AnimatedBrandTitle
 import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.hubViewModel
@@ -88,18 +95,44 @@ fun LoginScreen(
         if (!state.busy) focusRequester.requestFocus()
     }
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        HubColors.Background,
+                        HubColors.SurfaceStrong.copy(alpha = 0.98f),
+                        HubColors.Background,
+                    ),
+                ),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        LoginAtmosphere()
+        HubGlassCard(
+            modifier = Modifier
+                .padding(horizontal = 20.dp, vertical = 24.dp)
+                .widthIn(max = 520.dp)
+                .fillMaxWidth()
+                .fillMaxHeight(0.94f),
+            strong = true,
+        ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
             modifier = Modifier
                 .fillMaxHeight()
-                .widthIn(max = 720.dp)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 28.dp),
+                .animateContentSize()
+                .padding(horizontal = 28.dp, vertical = 30.dp),
         ) {
             AnimatedBrandTitle(style = MaterialTheme.typography.displayLarge)
+            LoginProgressIndicator(
+                googleConnected = state.google != null,
+                mdblistStep = state.google != null || mdblistOnlyMode,
+            )
 
             if (state.google == null && !mdblistOnlyMode) {
                 Text(
@@ -197,9 +230,9 @@ fun LoginScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(HubColors.Surface)
-                            .border(1.dp, HubColors.Border, RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(HubTokens.Radius.lg))
+                            .background(HubColors.Surface.copy(alpha = HubTokens.Opacity.glassStrong))
+                            .border(1.dp, HubColors.Border, RoundedCornerShape(HubTokens.Radius.lg))
                             .padding(horizontal = 18.dp, vertical = 16.dp),
                     ) {
                         if (state.key.isEmpty()) {
@@ -266,9 +299,9 @@ fun LoginScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(HubColors.Surface)
-                            .border(1.dp, HubColors.Border, RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(HubTokens.Radius.lg))
+                            .background(HubColors.Surface.copy(alpha = HubTokens.Opacity.glassStrong))
+                            .border(1.dp, HubColors.Border, RoundedCornerShape(HubTokens.Radius.lg))
                             .padding(horizontal = 18.dp, vertical = 16.dp),
                     ) {
                         if (state.key.isEmpty()) {
@@ -340,6 +373,53 @@ fun LoginScreen(
             error?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = HubColors.Rotten)
             }
+        }
+        }
+    }
+}
+
+@Composable
+private fun LoginAtmosphere() {
+    Canvas(Modifier.fillMaxSize()) {
+        val shortest = minOf(size.width, size.height)
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(HubColors.Accent.copy(alpha = 0.24f), Color.Transparent),
+            ),
+            radius = shortest * 0.72f,
+            center = androidx.compose.ui.geometry.Offset(size.width * 0.08f, size.height * 0.08f),
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(HubColors.Accent2.copy(alpha = 0.18f), Color.Transparent),
+            ),
+            radius = shortest * 0.62f,
+            center = androidx.compose.ui.geometry.Offset(size.width * 0.92f, size.height * 0.88f),
+        )
+    }
+}
+
+@Composable
+private fun LoginProgressIndicator(
+    googleConnected: Boolean,
+    mdblistStep: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .widthIn(max = 220.dp)
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        listOf(true, googleConnected || mdblistStep).forEach { active ->
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(HubTokens.Radius.full))
+                    .background(
+                        if (active) HubColors.Accent else HubColors.Border.copy(alpha = 0.65f),
+                    ),
+            )
         }
     }
 }

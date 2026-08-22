@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -81,6 +82,18 @@ fun HubTheme(content: @Composable () -> Unit) {
         border = HubColors.Border,
     )
     MaterialTheme(colorScheme = colorScheme, typography = HubTypography) {
-        Box(Modifier.fillMaxSize().background(HubColors.Background)) { content() }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            HubColors.Background,
+                            HubColors.Surface.copy(alpha = 0.44f),
+                            HubColors.Background,
+                        ),
+                    ),
+                ),
+        ) { content() }
     }
 }
