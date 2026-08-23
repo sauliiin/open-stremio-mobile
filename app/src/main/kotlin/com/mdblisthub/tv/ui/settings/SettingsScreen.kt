@@ -305,13 +305,8 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
     // The bottom nav dropped its own theme-cycle button once this section
     // existed to pick one deliberately instead — see BottomNavBar.
     fun setTheme(target: HubThemeVariant) {
-        val actual = when {
-            _state.value.autotrailer && target == HubThemeVariant.NETFLIXY -> HubThemeVariant.CYBERFLIX
-            _state.value.autotrailer && target == HubThemeVariant.PRIMEFLY -> HubThemeVariant.OPTIMUS_PRIME
-            else -> target
-        }
-        HubColors.apply(actual)
-        viewModelScope.launch { graph.uiPreferences.saveTheme(actual) }
+        HubColors.apply(target)
+        viewModelScope.launch { graph.uiPreferences.saveTheme(target) }
     }
 
     fun toggleAmoledMode() {
@@ -322,7 +317,6 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
 
     fun toggleAutotrailer() = viewModelScope.launch {
         graph.uiPreferences.saveAutotrailer(!_state.value.autotrailer)
-        HubColors.apply(graph.uiPreferences.currentTheme())
     }
 
     fun signOut(onDone: () -> Unit) {
@@ -706,7 +700,7 @@ private fun SettingsPagePane(
                                 ThemePreviewChoice(
                                     variant = variant,
                                     label = label,
-                                    selected = themeBase(HubColors.variant) == variant,
+                                    selected = HubColors.variant == variant,
                                     onClick = { viewModel.setTheme(variant) },
                                 )
                             }
@@ -753,7 +747,7 @@ private fun SettingsPagePane(
                         SettingsDivider()
                         HubSettingRow(
                             title = stringResource(R.string.settings_autotrailer),
-                            description = stringResource(R.string.settings_autotrailer_description),
+                            description = stringResource(R.string.settings_autotrailer_pip_description),
                             trailing = {
                                 HubToggle(state.autotrailer, { viewModel.toggleAutotrailer() })
                             },
@@ -981,12 +975,6 @@ private fun ModernSettingsGroup(
     }
 }
 
-private fun themeBase(variant: HubThemeVariant): HubThemeVariant = when (variant) {
-    HubThemeVariant.CYBERFLIX -> HubThemeVariant.NETFLIXY
-    HubThemeVariant.OPTIMUS_PRIME -> HubThemeVariant.PRIMEFLY
-    else -> variant
-}
-
 @Composable
 private fun ThemePreviewChoice(
     variant: HubThemeVariant,
@@ -997,8 +985,8 @@ private fun ThemePreviewChoice(
     val preview = when (variant) {
         HubThemeVariant.NORMAL -> R.drawable.theme_normal_preview
         HubThemeVariant.CYBERPUNK -> R.drawable.theme_cyberpunk_preview
-        HubThemeVariant.NETFLIXY, HubThemeVariant.CYBERFLIX -> R.drawable.theme_netflixy_preview
-        HubThemeVariant.PRIMEFLY, HubThemeVariant.OPTIMUS_PRIME -> R.drawable.theme_primefly_preview
+        HubThemeVariant.NETFLIXY -> R.drawable.theme_netflixy_preview
+        HubThemeVariant.PRIMEFLY -> R.drawable.theme_primefly_preview
     }
     Column(
         modifier = Modifier

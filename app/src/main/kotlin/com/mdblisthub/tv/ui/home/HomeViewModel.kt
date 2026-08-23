@@ -304,6 +304,7 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** Trailer MP4 for the focused title, resolved only after a short dwell. */
     val focusedTrailerUrl: StateFlow<String?> = combine(
         graph.uiPreferences.autotrailer,
         _focused,
@@ -313,9 +314,11 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
                 flowOf<String?>(null)
             } else {
                 kotlinx.coroutines.flow.flow<String?> {
+                    // Clear the previous title immediately; resolving the next
+                    // one happens only if focus remains still through the dwell.
                     emit(null)
                     delay(TRAILER_DWELL_MS)
-                    val imdbId = item.imdbId?.takeIf { it.isNotBlank() }
+                    val imdbId = item.imdbId?.takeIf(String::isNotBlank)
                         ?: graph.media.observeDetail(item.type, item.tmdbId).first()?.imdbId
                     emit(imdbId?.let { runCatching { graph.trailers.mp4For(it) }.getOrNull() })
                 }

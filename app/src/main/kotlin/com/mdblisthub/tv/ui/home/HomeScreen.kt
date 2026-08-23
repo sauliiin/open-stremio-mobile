@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -142,8 +143,8 @@ private class RowPivotScroll(
             // The focused child is the card, not the whole shelf. This offset
             // equals the shelf heading plus its gap, so that heading lands at
             // the viewport top and every preceding shelf remains clipped.
-            variant == HubThemeVariant.PRIMEFLY || variant == HubThemeVariant.OPTIMUS_PRIME -> 0.11f * containerSize
-            variant == HubThemeVariant.NETFLIXY || variant == HubThemeVariant.CYBERFLIX -> 0.18f * containerSize
+            variant == HubThemeVariant.PRIMEFLY -> 0.11f * containerSize
+            variant == HubThemeVariant.NETFLIXY -> 0.18f * containerSize
             else -> ROW_PIVOT * containerSize
         }
 
@@ -459,7 +460,21 @@ fun HomeScreen(
         // The fanart follows focus, the way Estuary does it: whatever the
         // remote is pointing at fills the screen behind the rows.
         FocusedBackdrop(viewModel)
-        if (HubColors.hasHeroTrailer) FocusedHeroTrailer(viewModel)
+
+        if ((HubColors.isNetflixLayout || HubColors.isPrimefly) && !isEditMode) {
+            val trailerPipWidth = (LocalConfiguration.current.screenWidthDp - 36)
+                .coerceAtMost(352)
+                .coerceAtLeast(176)
+                .dp
+            FocusedTrailerPip(
+                viewModel = viewModel,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 20.dp, end = 18.dp)
+                    .width(trailerPipWidth)
+                    .zIndex(2f),
+            )
+        }
 
         Column(Modifier.fillMaxSize()) {
         Row(Modifier.weight(1f)) {

@@ -17,7 +17,7 @@
     <string name="settings_amoled_mode">Modo AMOLED</string>
     <string name="settings_amoled_mode_description">Use preto puro nos fundos do aplicativo</string>
     <string name="settings_autotrailer">Trailers automáticos</string>
-    <string name="settings_autotrailer_description">Reproduza prévias nos temas Cyberflix e Optimus Prime</string>
+    <string name="settings_autotrailer_pip_description">Reproduza prévias com áudio em uma pequena janela</string>
     <string name="settings_subtitle_text_opacity">Opacidade do texto</string>
     <string name="settings_subtitle_background">Fundo preto</string>
     <string name="settings_subtitle_background_opacity">Opacidade do fundo</string>

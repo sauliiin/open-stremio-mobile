@@ -54,11 +54,9 @@ class UiPreferencesStore(context: Context) {
      * and a renamed enum constant would otherwise do exactly that.
      */
     val theme: Flow<HubThemeVariant> = store.data.map { prefs ->
-        val autotrailer = prefs[KEY_AUTOTRAILER] ?: false
-        val variant = prefs[KEY_THEME]
-            ?.let { name -> runCatching { HubThemeVariant.valueOf(name) }.getOrNull() }
+        prefs[KEY_THEME]
+            ?.let(::parseTheme)
             ?: HubThemeVariant.NORMAL
-        normalizedTheme(variant, autotrailer)
     }
 
     suspend fun currentTheme(): HubThemeVariant = theme.first()
@@ -69,12 +67,10 @@ class UiPreferencesStore(context: Context) {
      * theme without a blocking read. Same tolerance for a bad value as
      * [theme]: a preference is never worth failing a start over.
      */
-    fun startupTheme(): HubThemeVariant {
-        val variant = startupMirror.getString(KEY_THEME.name, null)
-            ?.let { name -> runCatching { HubThemeVariant.valueOf(name) }.getOrNull() }
+    fun startupTheme(): HubThemeVariant =
+        startupMirror.getString(KEY_THEME.name, null)
+            ?.let(::parseTheme)
             ?: HubThemeVariant.NORMAL
-        return normalizedTheme(variant, startupMirror.getBoolean(KEY_AUTOTRAILER.name, false))
-    }
 
     suspend fun saveTheme(variant: HubThemeVariant) {
         // `apply`, not `commit`: nothing this launch depends on it having
@@ -94,9 +90,7 @@ class UiPreferencesStore(context: Context) {
     val autotrailer: Flow<Boolean> = store.data.map { it[KEY_AUTOTRAILER] ?: false }
 
     suspend fun saveAutotrailer(enabled: Boolean) {
-        startupMirror.edit().putBoolean(KEY_AUTOTRAILER.name, enabled).apply()
         store.edit { it[KEY_AUTOTRAILER] = enabled }
-        saveTheme(normalizedTheme(currentTheme(), enabled))
     }
 
     val amoledMode: Flow<Boolean> = store.data.map { it[KEY_AMOLED_MODE] ?: false }
@@ -198,12 +192,12 @@ class UiPreferencesStore(context: Context) {
     }
 
     private companion object {
-        fun normalizedTheme(variant: HubThemeVariant, autotrailer: Boolean): HubThemeVariant = when {
-            autotrailer && variant == HubThemeVariant.NETFLIXY -> HubThemeVariant.CYBERFLIX
-            autotrailer && variant == HubThemeVariant.PRIMEFLY -> HubThemeVariant.OPTIMUS_PRIME
-            !autotrailer && variant == HubThemeVariant.CYBERFLIX -> HubThemeVariant.NETFLIXY
-            !autotrailer && variant == HubThemeVariant.OPTIMUS_PRIME -> HubThemeVariant.PRIMEFLY
-            else -> variant
+        fun parseTheme(name: String): HubThemeVariant? = when (name) {
+            // Migrate preferences written by the short-lived autotrailer
+            // variants back to their identical static themes.
+            "CYBERFLIX" -> HubThemeVariant.NETFLIXY
+            "OPTIMUS_PRIME" -> HubThemeVariant.PRIMEFLY
+            else -> runCatching { HubThemeVariant.valueOf(name) }.getOrNull()
         }
 
         const val STARTUP_MIRROR = "ui-preferences-startup"
