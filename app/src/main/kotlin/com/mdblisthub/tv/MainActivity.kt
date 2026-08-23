@@ -3,6 +3,9 @@ package com.mdblisthub.tv
 import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Build
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -14,11 +17,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.view.WindowCompat
+import androidx.core.app.ActivityCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mdblisthub.tv.core.ui.theme.HubTheme
 import com.mdblisthub.tv.navigation.HubNavHost
 import com.mdblisthub.tv.update.AppUpdateManager
 import com.mdblisthub.tv.update.AppUpdateOverlay
+import com.mdblisthub.tv.ui.player.PlaybackCompletionNotifier
 import java.util.Locale
 
 /**
@@ -41,6 +49,13 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        hideStatusBar()
+        PlaybackCompletionNotifier.createChannel(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4108)
+        }
 
         val graph = (application as HubApplication).graph
         appUpdateManager = AppUpdateManager(this, GITHUB_REPOSITORY)
@@ -102,9 +117,22 @@ class MainActivity : ComponentActivity() {
         if (::appUpdateManager.isInitialized) appUpdateManager.onHostResumed()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideStatusBar()
+    }
+
     override fun onDestroy() {
         if (::appUpdateManager.isInitialized) appUpdateManager.close()
         super.onDestroy()
+    }
+
+    private fun hideStatusBar() {
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.statusBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 
     private companion object {

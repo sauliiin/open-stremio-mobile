@@ -19,10 +19,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 
@@ -64,6 +68,7 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
     private val exhaustedLists = mutableSetOf<Long>()
     private val moveMutex = Mutex()
     private var dynamicRefreshJob: Job? = null
+    private var spotlightLoadJob: Job? = null
 
     /**
      * The row a reorder just moved, for the screen to scroll back into view.
@@ -128,6 +133,10 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
 
     fun toggleEditMode() {
         _isEditMode.value = !_isEditMode.value
+    }
+
+    fun setEditMode(enabled: Boolean) {
+        _isEditMode.value = enabled
     }
 
     fun toggleListVisibility(list: MediaList) {
@@ -295,6 +304,26 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    val focusedTrailerUrl: StateFlow<String?> = combine(
+        graph.uiPreferences.autotrailer,
+        _focused,
+    ) { enabled, item -> enabled to item }
+        .flatMapLatest { (enabled, item) ->
+            if (!enabled || item == null) {
+                flowOf<String?>(null)
+            } else {
+                kotlinx.coroutines.flow.flow<String?> {
+                    emit(null)
+                    delay(TRAILER_DWELL_MS)
+                    val imdbId = item.imdbId?.takeIf { it.isNotBlank() }
+                        ?: graph.media.observeDetail(item.type, item.tmdbId).first()?.imdbId
+                    emit(imdbId?.let { runCatching { graph.trailers.mp4For(it) }.getOrNull() })
+                }
+            }
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /**
      * "Porque você assistiu" — built once per visit, not persisted: unlike
      * the mdblist rows above, TMDB's recommendations have nothing worth
@@ -303,6 +332,61 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
      */
     private val _becauseYouWatched = MutableStateFlow<List<RecommendationRow>>(emptyList())
     val becauseYouWatched: StateFlow<List<RecommendationRow>> = _becauseYouWatched.asStateFlow()
+
+    /** Personalised, artwork-safe recommendations used by the Nuvio-style hero. */
+    private val _spotlight = MutableStateFlow<List<MediaItem>>(emptyList())
+    val spotlight: StateFlow<List<MediaItem>> = _spotlight.asStateFlow()
+
+    private val _spotlightLoaded = MutableStateFlow(false)
+    val spotlightLoaded: StateFlow<Boolean> = _spotlightLoaded.asStateFlow()
+
+    private val _spotlightIndex = MutableStateFlow(0)
+
+    val spotlightItem: StateFlow<MediaItem?> =
+        kotlinx.coroutines.flow.combine(_spotlight, _spotlightIndex) { items, index ->
+            items.getOrNull(index)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Detail is hydrated only for the visible slide, not for the whole pool. */
+    val spotlightDetail: StateFlow<com.mdblisthub.tv.core.model.MediaDetail?> = spotlightItem
+        .flatMapLatest { item ->
+            if (item == null || item.tmdbId <= 0) {
+                flowOf(null)
+            } else {
+                kotlinx.coroutines.flow.flow<com.mdblisthub.tv.core.model.MediaDetail?> {
+                    emit(null)
+                    kotlinx.coroutines.coroutineScope {
+                        launch { graph.media.ensureDetail(item.type, item.tmdbId) }
+                        emitAll(graph.media.observeDetail(item.type, item.tmdbId))
+                    }
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun selectSpotlight(index: Int) {
+        val items = _spotlight.value
+        if (index !in items.indices) return
+        _spotlightIndex.value = index
+        val next = items[(index + 1) % items.size]
+        if (next.tmdbId > 0) graph.prefetcher.prefetch(next.type, next.tmdbId)
+    }
+
+    /** Loads the hero lazily, because Netflixy and Primefly do not render it. */
+    fun ensureSpotlight() {
+        if (_spotlightLoaded.value || spotlightLoadJob?.isActive == true) return
+        spotlightLoadJob = viewModelScope.launch {
+            try {
+                _spotlight.value = graph.recommendations.spotlight()
+                _spotlightIndex.value = 0
+                _spotlight.value.firstOrNull()?.let { first ->
+                    graph.prefetcher.prefetch(first.type, first.tmdbId)
+                }
+            } finally {
+                _spotlightLoaded.value = true
+            }
+        }
+    }
 
     init {
         refreshDynamicRows()
@@ -441,6 +525,7 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
          * fallback flashing first.
          */
         const val FANART_SETTLE_MS = 350L
+        const val TRAILER_DWELL_MS = 1_500L
     }
 
     private fun catalogCacheKey(catalog: AddonCatalog): String =

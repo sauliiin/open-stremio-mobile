@@ -81,6 +81,7 @@ class PlayerViewModel(
 ) : ViewModel() {
 
     private val appContext = context.applicationContext
+    private val completionNotifier = PlaybackCompletionNotifier(appContext, type, tmdbId, season, episode)
 
     val controller = PlaybackController(
         context = appContext,
@@ -106,6 +107,12 @@ class PlayerViewModel(
 
     val subtitleColor: StateFlow<String> = graph.uiPreferences.subtitleColor
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "white")
+    val subtitleTextOpacity: StateFlow<Int> = graph.uiPreferences.subtitleTextOpacity
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 100)
+    val subtitleBackgroundEnabled: StateFlow<Boolean> = graph.uiPreferences.subtitleBackgroundEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val subtitleBackgroundOpacity: StateFlow<Int> = graph.uiPreferences.subtitleBackgroundOpacity
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 40)
 
     private var target: ScrobbleTarget? = null
     private var lastReportedProgress = 0f
@@ -401,6 +408,11 @@ class PlayerViewModel(
                             playingOfflineId = null
                         }
                         graph.playback.stop(current, lastReportedProgress)
+                        completionNotifier.show(
+                            title = _ui.value.title,
+                            episodeLabel = _ui.value.episodeLabel,
+                            languageTag = graph.uiPreferences.language.first(),
+                        )
                     }
                     else -> Unit
                 }

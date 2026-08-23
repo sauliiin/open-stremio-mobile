@@ -130,15 +130,20 @@ private sealed interface EditableListTarget {
 private class RowPivotScroll(
     private val variant: HubThemeVariant,
     private val normalFirstRowOffsetPx: Float,
+    private val heroScrollDistance: (offset: Float, size: Float) -> Float? = { _, _ -> null },
 ) : BringIntoViewSpec {
     override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+        // A button near the bottom of the spotlight belongs to the hero, not
+        // to a shelf. Keep the whole hero at its one valid resting position.
+        heroScrollDistance(offset, size)?.let { return it }
+
         val pivot = when {
             variant == HubThemeVariant.NORMAL -> normalFirstRowOffsetPx
             // The focused child is the card, not the whole shelf. This offset
             // equals the shelf heading plus its gap, so that heading lands at
             // the viewport top and every preceding shelf remains clipped.
-            variant == HubThemeVariant.PRIMEFLY -> 0.11f * containerSize
-            variant == HubThemeVariant.NETFLIXY -> 0.18f * containerSize
+            variant == HubThemeVariant.PRIMEFLY || variant == HubThemeVariant.OPTIMUS_PRIME -> 0.11f * containerSize
+            variant == HubThemeVariant.NETFLIXY || variant == HubThemeVariant.CYBERFLIX -> 0.18f * containerSize
             else -> ROW_PIVOT * containerSize
         }
 
@@ -165,6 +170,7 @@ fun HomeScreen(
     onOpenTitle: (MediaItem) -> Unit,
     onOpenAddons: () -> Unit,
     onResume: (ResumePoint) -> Unit,
+    initialEditMode: Boolean = false,
 ) {
     val viewModel = hubViewModel { HomeViewModel(graph) }
     val lists by viewModel.lists.collectAsStateWithLifecycle()
@@ -180,6 +186,8 @@ fun HomeScreen(
     // `HeroPanel` and the backdrop collect them themselves, so the scope that
     // invalidates is the one that actually displays the value.
     val becauseYouWatched by viewModel.becauseYouWatched.collectAsStateWithLifecycle()
+    val spotlight by viewModel.spotlight.collectAsStateWithLifecycle()
+    val spotlightLoaded by viewModel.spotlightLoaded.collectAsStateWithLifecycle()
     val isEditMode by viewModel.isEditMode.collectAsStateWithLifecycle()
     val watchedIds by viewModel.watchedIds.collectAsStateWithLifecycle()
     val watchedEpisodes by viewModel.watchedEpisodes.collectAsStateWithLifecycle()
@@ -188,17 +196,23 @@ fun HomeScreen(
     val deletedListIds by graph.session.deletedListIds.collectAsStateWithLifecycle(initialValue = emptySet())
     val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
-    val isNormalTheme = HubColors.variant == HubThemeVariant.NORMAL
-    var initialNormalFocusPending by remember { mutableStateOf(false) }
+    val themeVariant = HubColors.variant
+    val isNormalTheme = themeVariant == HubThemeVariant.NORMAL
+    val isSpotlightTheme = isNormalTheme || themeVariant == HubThemeVariant.CYBERPUNK
+    var initialSpotlightFocusPending by remember { mutableStateOf(false) }
 
     // Hoisted so the reorder-reveal below can convert a row index into a
     // `LazyColumn` index. These two decide how many fixed items sit above the
     // row list, and stating them once is what keeps that arithmetic from
     // drifting out of step with the items themselves.
-    val hasHeroItem = !HubColors.isNetflixy && !HubColors.isPrimefly && !isNormalTheme
+    val hasSpotlightHero = isSpotlightTheme && (!spotlightLoaded || spotlight.isNotEmpty())
     val hasResumeItem = resumePoints.isNotEmpty() && !isEditMode
     val homeListState = rememberLazyListState()
     val rowToReveal by viewModel.rowToReveal.collectAsStateWithLifecycle()
+
+    LaunchedEffect(initialEditMode) {
+        viewModel.setEditMode(initialEditMode)
+    }
 
     /**
      * Follows a row that edit mode just moved.
@@ -215,7 +229,8 @@ fun HomeScreen(
      */
     LaunchedEffect(rowToReveal) {
         val reveal = rowToReveal ?: return@LaunchedEffect
-        val leading = (if (hasHeroItem) 1 else 0) + (if (hasResumeItem) 1 else 0)
+        val leading = (if (hasSpotlightHero) 1 else 0) +
+            (if (hasResumeItem) 1 else 0)
         val targetIndex = leading + reveal.rowIndex
         val layout = homeListState.layoutInfo
         val visible = layout.visibleItemsInfo.firstOrNull { it.index == targetIndex }
@@ -228,15 +243,16 @@ fun HomeScreen(
         viewModel.onRowRevealed()
     }
 
-    LaunchedEffect(isNormalTheme) {
-        initialNormalFocusPending = isNormalTheme
+    LaunchedEffect(themeVariant) {
+        initialSpotlightFocusPending = isSpotlightTheme
+        if (isSpotlightTheme) viewModel.ensureSpotlight()
     }
 
-    DisposableEffect(lifecycleOwner, viewModel, isNormalTheme) {
+    DisposableEffect(lifecycleOwner, viewModel, themeVariant) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshDynamicRows()
-                if (isNormalTheme) initialNormalFocusPending = true
+                if (isSpotlightTheme) initialSpotlightFocusPending = true
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -316,10 +332,25 @@ fun HomeScreen(
     val resumeRemoveLabel = stringResource(R.string.home_delete)
     val emptyStateFocusRequester = remember { FocusRequester() }
     val normalFirstRowOffsetPx = with(LocalDensity.current) { 32.dp.toPx() }
-    val rowPivotScroll = remember(HubColors.variant, normalFirstRowOffsetPx) {
-        RowPivotScroll(HubColors.variant, normalFirstRowOffsetPx)
+    val spotlightHeroHeightPx = with(LocalDensity.current) { nuvioSpotlightHeroHeight().toPx() }
+    val rowPivotScroll = remember(
+        themeVariant,
+        normalFirstRowOffsetPx,
+        spotlightHeroHeightPx,
+        hasSpotlightHero,
+    ) {
+        RowPivotScroll(themeVariant, normalFirstRowOffsetPx) { offset, size ->
+            val scrolledOff = homeListState.firstVisibleItemScrollOffset.toFloat()
+            when {
+                !hasSpotlightHero -> null
+                homeListState.firstVisibleItemIndex != 0 -> null
+                offset < -scrolledOff - 1f -> null
+                offset + size > spotlightHeroHeightPx - scrolledOff + 1f -> null
+                else -> -scrolledOff
+            }
+        }
     }
-    val onInitialNormalFocusHandled = { initialNormalFocusPending = false }
+    val onInitialSpotlightFocusHandled = { initialSpotlightFocusPending = false }
 
     renameTarget?.let { target ->
         Dialog(onDismissRequest = { renameTarget = null }) {
@@ -428,6 +459,7 @@ fun HomeScreen(
         // The fanart follows focus, the way Estuary does it: whatever the
         // remote is pointing at fills the screen behind the rows.
         FocusedBackdrop(viewModel)
+        if (HubColors.hasHeroTrailer) FocusedHeroTrailer(viewModel)
 
         Column(Modifier.fillMaxSize()) {
         Row(Modifier.weight(1f)) {
@@ -471,7 +503,10 @@ fun HomeScreen(
                 return@Row
             }
 
-            if (lists.isEmpty() && feeds.isEmpty() && resumePoints.isEmpty() && extraCatalogs.isEmpty()) {
+            if (
+                lists.isEmpty() && feeds.isEmpty() && resumePoints.isEmpty() &&
+                extraCatalogs.isEmpty() && !hasSpotlightHero
+            ) {
                 val hasHiddenRows = allLists.isNotEmpty() || allFeeds.isNotEmpty() || allAddonCatalogs.isNotEmpty()
                 LaunchedEffect(hasHiddenRows) { emptyStateFocusRequester.requestFocus() }
                 Column(
@@ -510,15 +545,7 @@ fun HomeScreen(
             }
 
             Column(Modifier.fillMaxSize()) {
-                if (isNormalTheme) {
-                    val configuration = LocalConfiguration.current
-                    val normalHeroHeight = if (
-                        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-                    ) 118.dp else 176.dp
-                    Box(Modifier.fillMaxWidth().height(normalHeroHeight)) {
-                        HeroPanel(viewModel)
-                    }
-                } else if (HubColors.isNetflixy || HubColors.isPrimefly) {
+                if (HubColors.isNetflixLayout || HubColors.isPrimefly) {
                     // A fixed, phone-appropriate height rather than the TV
                     // build's `weight(1f)`: on a screen far taller than it is
                     // wide, giving the hero whatever space the shelves below
@@ -583,10 +610,18 @@ fun HomeScreen(
                             bottom = HubDimens.ScreenPaddingVertical * 8,
                         ),
                     ) {
-                        // Normal joins the themes whose hero is fixed above the shelves.
-                        if (hasHeroItem) {
-                            item(key = "hero") {
-                                HeroPanel(viewModel)
+                        if (hasSpotlightHero) {
+                            item(key = "spotlight") {
+                                if (spotlightLoaded) {
+                                    NuvioSpotlightHero(
+                                        viewModel = viewModel,
+                                        onOpen = onOpenTitle,
+                                        requestInitialFocus = initialSpotlightFocusPending && !isEditMode,
+                                        onInitialFocusHandled = onInitialSpotlightFocusHandled,
+                                    )
+                                } else {
+                                    NuvioSpotlightSkeleton()
+                                }
                             }
                         }
 
@@ -630,9 +665,12 @@ fun HomeScreen(
                             },
                             progressPercent = { index, _ -> resumePoints.getOrNull(index)?.progress },
                             isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
-                            requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
-                            requestInitialFocus = isNormalTheme && initialNormalFocusPending && !isEditMode,
-                            onInitialFocusHandled = onInitialNormalFocusHandled,
+                            requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
+                            requestInitialFocus = isSpotlightTheme &&
+                                !hasSpotlightHero &&
+                                initialSpotlightFocusPending &&
+                                !isEditMode,
+                            onInitialFocusHandled = onInitialSpotlightFocusHandled,
                         )
                     }
                 }
@@ -647,8 +685,9 @@ fun HomeScreen(
                         }
                     },
                 ) { index, row ->
-                    val requestInitialFocus = isNormalTheme &&
-                        initialNormalFocusPending &&
+                    val requestInitialFocus = isSpotlightTheme &&
+                        !hasSpotlightHero &&
+                        initialSpotlightFocusPending &&
                         !isEditMode &&
                         resumePoints.isEmpty() &&
                         index == 0
@@ -678,7 +717,7 @@ fun HomeScreen(
                                 onReachedEnd = { viewModel.loadMore(list.id) },
                                 isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
                                 requestInitialFocus = requestInitialFocus,
-                                onInitialFocusHandled = onInitialNormalFocusHandled,
+                                onInitialFocusHandled = onInitialSpotlightFocusHandled,
                             )
                         }
                         is HomeMediaRow.Stremio -> {
@@ -709,7 +748,7 @@ fun HomeScreen(
                                 onItemFocused = viewModel::onFocused,
                                 isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
                                 requestInitialFocus = requestInitialFocus,
-                                onInitialFocusHandled = onInitialNormalFocusHandled,
+                                onInitialFocusHandled = onInitialSpotlightFocusHandled,
                             )
                         }
                         is HomeMediaRow.Feed -> {
@@ -750,9 +789,9 @@ fun HomeScreen(
                                         watchedIds.contains(item.tmdbId)
                                     }
                                 },
-                                requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
+                                requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
                                 requestInitialFocus = requestInitialFocus,
-                                onInitialFocusHandled = onInitialNormalFocusHandled,
+                                onInitialFocusHandled = onInitialSpotlightFocusHandled,
                             )
                         }
                     }
@@ -770,13 +809,14 @@ fun HomeScreen(
                             items = row.items,
                             onItemClick = onOpenTitle,
                             onItemFocused = viewModel::onFocused,
-                            requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
-                            requestInitialFocus = isNormalTheme &&
-                                initialNormalFocusPending &&
+                            requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
+                            requestInitialFocus = isSpotlightTheme &&
+                                !hasSpotlightHero &&
+                                initialSpotlightFocusPending &&
                                 resumePoints.isEmpty() &&
                                 homeRows.isEmpty() &&
                                 index == 0,
-                            onInitialFocusHandled = onInitialNormalFocusHandled,
+                            onInitialFocusHandled = onInitialSpotlightFocusHandled,
                         )
                     }
                 }
@@ -835,7 +875,7 @@ private fun AddonCatalogRow(
         onItemClick = onItemClick,
         onItemFocused = onItemFocused,
         isWatched = isWatched,
-        requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
+        requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
         requestInitialFocus = requestInitialFocus,
         onInitialFocusHandled = onInitialFocusHandled,
     )
@@ -904,7 +944,7 @@ private fun ListRow(
         onItemFocused = onItemFocused,
         isWatched = isWatched,
         onReachedEnd = onReachedEnd,
-        requireDoubleTapToOpen = HubColors.isNetflixy || HubColors.isPrimefly,
+        requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
         requestInitialFocus = requestInitialFocus,
         onInitialFocusHandled = onInitialFocusHandled,
     )
@@ -967,7 +1007,7 @@ private fun HeroPanel(viewModel: HomeViewModel) {
 
 @Composable
 private fun HeroPanelContent(item: MediaItem?, itemDetail: MediaDetail?) {
-    if (HubColors.isNetflixy || HubColors.isPrimefly) {
+    if (HubColors.isNetflixLayout || HubColors.isPrimefly) {
         val configuration = LocalConfiguration.current
         val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 

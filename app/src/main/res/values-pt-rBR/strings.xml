@@ -1,9 +1,27 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">OmniStream</string>
+    <string name="welcome_title">Boas-vindas ao OmniStream</string>
+    <string name="welcome_subtitle">Escolha o tema da sua tela inicial</string>
+    <string name="welcome_continue">Continuar</string>
+    <string name="playback_notification_channel">Reprodução concluída</string>
+    <string name="playback_notification_channel_description">Avisos quando um filme ou episódio termina</string>
+    <string name="playback_notification_movie_title">Filme concluído</string>
+    <string name="playback_notification_episode_title">Episódio concluído</string>
+    <string name="playback_notification_episode_content">%1$s — %2$s</string>
     <string name="menu_home">Início</string>
     <string name="menu_search">Busca</string>
     <string name="menu_addons">Addons</string>
+    <string name="settings_page_addons_description">Gerencie addons instalados e fontes de catálogos</string>
+    <string name="settings_appearance_options">Opções de aparência</string>
+    <string name="settings_amoled_mode">Modo AMOLED</string>
+    <string name="settings_amoled_mode_description">Use preto puro nos fundos do aplicativo</string>
+    <string name="settings_autotrailer">Trailers automáticos</string>
+    <string name="settings_autotrailer_description">Reproduza prévias nos temas Cyberflix e Optimus Prime</string>
+    <string name="settings_subtitle_text_opacity">Opacidade do texto</string>
+    <string name="settings_subtitle_background">Fundo preto</string>
+    <string name="settings_subtitle_background_opacity">Opacidade do fundo</string>
+    <string name="color_black">Preto</string>
     <string name="menu_lists">Listas</string>
     <string name="menu_lists_done">Concluir</string>
     <string name="menu_theme_normal">Normal</string>
@@ -148,6 +166,7 @@
     <!-- Home: continuar assistindo -->
     <string name="home_resume_row">Continuar assistindo</string>
     <string name="home_because_you_watched">Porque você assistiu %1$s</string>
+    <string name="home_view_details">Ver detalhes</string>
     <string name="home_type_show">Série</string>
     <string name="home_type_movie">Filme</string>
     <string name="home_minutes">%1$d min</string>

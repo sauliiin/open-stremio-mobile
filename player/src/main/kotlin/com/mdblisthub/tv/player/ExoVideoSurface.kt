@@ -33,6 +33,7 @@ fun ExoVideoSurface(
     scaleType: VideoScaleType,
     modifier: Modifier = Modifier,
     subtitleColor: ComposeColor = ComposeColor.Yellow,
+    subtitleBackgroundColor: ComposeColor = ComposeColor.Transparent,
 ) {
     AndroidView(
         modifier = modifier,
@@ -74,7 +75,7 @@ fun ExoVideoSurface(
             view.subtitleView?.setStyle(
                 CaptionStyleCompat(
                     subtitleColor.toArgb(),
-                    Color.TRANSPARENT,
+                    subtitleBackgroundColor.toArgb(),
                     Color.TRANSPARENT,
                     CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
                     Color.BLACK,

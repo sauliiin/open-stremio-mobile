@@ -244,13 +244,20 @@ fun PlayerScreen(
     }
     
     val subtitleColorString by viewModel.subtitleColor.collectAsStateWithLifecycle()
+    val subtitleTextOpacity by viewModel.subtitleTextOpacity.collectAsStateWithLifecycle()
+    val subtitleBackgroundEnabled by viewModel.subtitleBackgroundEnabled.collectAsStateWithLifecycle()
+    val subtitleBackgroundOpacity by viewModel.subtitleBackgroundOpacity.collectAsStateWithLifecycle()
 
-    val parsedSubtitleColor = when (subtitleColorString) {
+    val parsedSubtitleColor = (when (subtitleColorString) {
         "white" -> Color.White
         "red" -> Color.Red
         "blue" -> Color.Blue
+        "black" -> Color.Black
         else -> Color.Yellow
-    }
+    }).copy(alpha = subtitleTextOpacity.coerceIn(0, 100) / 100f)
+    val parsedSubtitleBackground = if (subtitleBackgroundEnabled) {
+        Color.Black.copy(alpha = subtitleBackgroundOpacity.coerceIn(0, 100) / 100f)
+    } else Color.Transparent
 
     var osdVisibleUntil by remember { mutableLongStateOf(System.currentTimeMillis() + OSD_TIMEOUT_MS) }
     /**
@@ -472,6 +479,7 @@ fun PlayerScreen(
             controller = viewModel.controller,
             scaleType = playback.scaleType,
             subtitleColor = parsedSubtitleColor,
+            subtitleBackgroundColor = parsedSubtitleBackground,
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -613,6 +621,7 @@ fun PlayerScreen(
                 liftForOsd = osdOnScreen,
                 liftForCast = castRailOpen,
                 color = parsedSubtitleColor,
+                backgroundColor = parsedSubtitleBackground,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -1115,6 +1124,7 @@ private fun ExternalSubtitleOverlay(
     liftForCast: Boolean,
     modifier: Modifier = Modifier,
     color: Color = Color.Yellow,
+    backgroundColor: Color = Color.Transparent,
 ) {
     val bottomPadding by animateDpAsState(
         when {
@@ -1130,6 +1140,8 @@ private fun ExternalSubtitleOverlay(
         modifier = modifier
             .padding(horizontal = 32.dp)
             .padding(bottom = bottomPadding)
+            .background(backgroundColor, RoundedCornerShape(4.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp)
             .semantics { liveRegion = LiveRegionMode.Polite },
         color = color,
         textAlign = TextAlign.Center,

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import com.mdblisthub.tv.core.model.LibraryProvider
@@ -53,9 +54,11 @@ class UiPreferencesStore(context: Context) {
      * and a renamed enum constant would otherwise do exactly that.
      */
     val theme: Flow<HubThemeVariant> = store.data.map { prefs ->
-        prefs[KEY_THEME]
+        val autotrailer = prefs[KEY_AUTOTRAILER] ?: false
+        val variant = prefs[KEY_THEME]
             ?.let { name -> runCatching { HubThemeVariant.valueOf(name) }.getOrNull() }
             ?: HubThemeVariant.NORMAL
+        normalizedTheme(variant, autotrailer)
     }
 
     suspend fun currentTheme(): HubThemeVariant = theme.first()
@@ -66,16 +69,41 @@ class UiPreferencesStore(context: Context) {
      * theme without a blocking read. Same tolerance for a bad value as
      * [theme]: a preference is never worth failing a start over.
      */
-    fun startupTheme(): HubThemeVariant =
-        startupMirror.getString(KEY_THEME.name, null)
+    fun startupTheme(): HubThemeVariant {
+        val variant = startupMirror.getString(KEY_THEME.name, null)
             ?.let { name -> runCatching { HubThemeVariant.valueOf(name) }.getOrNull() }
             ?: HubThemeVariant.NORMAL
+        return normalizedTheme(variant, startupMirror.getBoolean(KEY_AUTOTRAILER.name, false))
+    }
 
     suspend fun saveTheme(variant: HubThemeVariant) {
         // `apply`, not `commit`: nothing this launch depends on it having
         // landed, and the next cold start is far away.
         startupMirror.edit().putString(KEY_THEME.name, variant.name).apply()
         store.edit { it[KEY_THEME] = variant.name }
+    }
+
+    val setupCompleted: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_SETUP_COMPLETED] ?: (KEY_THEME in prefs)
+    }
+
+    suspend fun saveSetupCompleted(completed: Boolean) {
+        store.edit { it[KEY_SETUP_COMPLETED] = completed }
+    }
+
+    val autotrailer: Flow<Boolean> = store.data.map { it[KEY_AUTOTRAILER] ?: false }
+
+    suspend fun saveAutotrailer(enabled: Boolean) {
+        startupMirror.edit().putBoolean(KEY_AUTOTRAILER.name, enabled).apply()
+        store.edit { it[KEY_AUTOTRAILER] = enabled }
+        saveTheme(normalizedTheme(currentTheme(), enabled))
+    }
+
+    val amoledMode: Flow<Boolean> = store.data.map { it[KEY_AMOLED_MODE] ?: false }
+    fun startupAmoledMode(): Boolean = startupMirror.getBoolean(KEY_AMOLED_MODE.name, false)
+    suspend fun saveAmoledMode(enabled: Boolean) {
+        startupMirror.edit().putBoolean(KEY_AMOLED_MODE.name, enabled).apply()
+        store.edit { it[KEY_AMOLED_MODE] = enabled }
     }
 
     val language: Flow<String> = store.data.map { prefs ->
@@ -104,6 +132,27 @@ class UiPreferencesStore(context: Context) {
     }
     suspend fun saveSubtitleColor(color: String) {
         store.edit { it[KEY_SUBTITLE_COLOR] = color }
+    }
+
+    val subtitleTextOpacity: Flow<Int> = store.data.map {
+        (it[KEY_SUBTITLE_TEXT_OPACITY] ?: 100).coerceIn(0, 100)
+    }
+    suspend fun saveSubtitleTextOpacity(opacity: Int) {
+        store.edit { it[KEY_SUBTITLE_TEXT_OPACITY] = opacity.coerceIn(0, 100) }
+    }
+
+    val subtitleBackgroundEnabled: Flow<Boolean> = store.data.map {
+        it[KEY_SUBTITLE_BACKGROUND_ENABLED] ?: false
+    }
+    suspend fun saveSubtitleBackgroundEnabled(enabled: Boolean) {
+        store.edit { it[KEY_SUBTITLE_BACKGROUND_ENABLED] = enabled }
+    }
+
+    val subtitleBackgroundOpacity: Flow<Int> = store.data.map {
+        (it[KEY_SUBTITLE_BACKGROUND_OPACITY] ?: 40).coerceIn(0, 100)
+    }
+    suspend fun saveSubtitleBackgroundOpacity(opacity: Int) {
+        store.edit { it[KEY_SUBTITLE_BACKGROUND_OPACITY] = opacity.coerceIn(0, 100) }
     }
 
     val audioLanguage: Flow<String> = store.data.map { prefs ->
@@ -149,13 +198,27 @@ class UiPreferencesStore(context: Context) {
     }
 
     private companion object {
+        fun normalizedTheme(variant: HubThemeVariant, autotrailer: Boolean): HubThemeVariant = when {
+            autotrailer && variant == HubThemeVariant.NETFLIXY -> HubThemeVariant.CYBERFLIX
+            autotrailer && variant == HubThemeVariant.PRIMEFLY -> HubThemeVariant.OPTIMUS_PRIME
+            !autotrailer && variant == HubThemeVariant.CYBERFLIX -> HubThemeVariant.NETFLIXY
+            !autotrailer && variant == HubThemeVariant.OPTIMUS_PRIME -> HubThemeVariant.PRIMEFLY
+            else -> variant
+        }
+
         const val STARTUP_MIRROR = "ui-preferences-startup"
         val KEY_THEME = stringPreferencesKey("theme")
+        val KEY_SETUP_COMPLETED = booleanPreferencesKey("setup_completed")
+        val KEY_AUTOTRAILER = booleanPreferencesKey("autotrailer")
+        val KEY_AMOLED_MODE = booleanPreferencesKey("amoled_mode")
         val KEY_LIBRARY_PROVIDER = stringPreferencesKey("library_provider")
         val KEY_LANGUAGE = stringPreferencesKey("language")
         val KEY_SUBTITLE_AUTO_DOWNLOAD = booleanPreferencesKey("subtitle_auto_download")
         val KEY_SUBTITLE_LANGUAGE = stringPreferencesKey("subtitle_language")
         val KEY_SUBTITLE_COLOR = stringPreferencesKey("subtitle_color")
+        val KEY_SUBTITLE_TEXT_OPACITY = intPreferencesKey("subtitle_text_opacity")
+        val KEY_SUBTITLE_BACKGROUND_ENABLED = booleanPreferencesKey("subtitle_background_enabled")
+        val KEY_SUBTITLE_BACKGROUND_OPACITY = intPreferencesKey("subtitle_background_opacity")
         val KEY_AUDIO_LANGUAGE = stringPreferencesKey("audio_language")
         val KEY_DIM_UNWATCHED_EPISODES = booleanPreferencesKey("dim_unwatched_episodes")
     }

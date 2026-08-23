@@ -47,7 +47,14 @@ object HubColors {
 
     val isCyberpunk: Boolean get() = variant == HubThemeVariant.CYBERPUNK
     val isNetflixy: Boolean get() = variant == HubThemeVariant.NETFLIXY
-    val isPrimefly: Boolean get() = variant == HubThemeVariant.PRIMEFLY
+    val isPrimefly: Boolean get() = variant == HubThemeVariant.PRIMEFLY || variant == HubThemeVariant.OPTIMUS_PRIME
+    val isCyberflix: Boolean get() = variant == HubThemeVariant.CYBERFLIX
+    val isOptimusPrime: Boolean get() = variant == HubThemeVariant.OPTIMUS_PRIME
+    val isNetflixLayout: Boolean get() = isNetflixy || isCyberflix
+    val hasHeroTrailer: Boolean get() = isCyberflix || isOptimusPrime
+
+    var amoledMode by mutableStateOf(false)
+        private set
 
     /**
      * Paints a specific palette — what a cold start calls once the persisted
@@ -81,7 +88,7 @@ object HubColors {
             }
             // Deep red-black surfaces keep the whole theme recognizably red,
             // while preserving enough contrast for artwork and white text.
-            HubThemeVariant.NETFLIXY -> {
+            HubThemeVariant.NETFLIXY, HubThemeVariant.CYBERFLIX -> {
                 Background = Color(0xFF080001)
                 Surface = Color(0xFF1A080A)
                 SurfaceStrong = Color(0xFF2B0C10)
@@ -94,7 +101,7 @@ object HubColors {
                 TextFaint = Color(0xFF808080)
             }
             // Prime Video-inspired navy surfaces with its signature cyan.
-            HubThemeVariant.PRIMEFLY -> {
+            HubThemeVariant.PRIMEFLY, HubThemeVariant.OPTIMUS_PRIME -> {
                 Background = Color(0xFF0F171E)
                 Surface = Color(0xFF1A242F)
                 SurfaceStrong = Color(0xFF243244)
@@ -107,7 +114,21 @@ object HubColors {
                 TextFaint = Color(0xFF8197A4)
             }
         }
+        if (amoledMode) {
+            // Pure black switches off the background pixels on OLED panels.
+            // Surfaces keep a small amount of their theme tint so cards,
+            // navigation and settings remain visually separated instead of
+            // collapsing into one flat black sheet.
+            Background = Color.Black
+            Surface = Surface.amoledShade(0.48f)
+            SurfaceStrong = SurfaceStrong.amoledShade(0.58f)
+        }
         variant = target
+    }
+
+    fun applyAmoledMode(enabled: Boolean) {
+        amoledMode = enabled
+        apply(variant)
     }
 
     /**
@@ -120,8 +141,17 @@ object HubColors {
             HubThemeVariant.CYBERPUNK -> HubThemeVariant.NETFLIXY
             HubThemeVariant.NETFLIXY -> HubThemeVariant.PRIMEFLY
             HubThemeVariant.PRIMEFLY -> HubThemeVariant.NORMAL
+            HubThemeVariant.CYBERFLIX -> HubThemeVariant.OPTIMUS_PRIME
+            HubThemeVariant.OPTIMUS_PRIME -> HubThemeVariant.NORMAL
         }
         apply(next)
         return next
     }
 }
+
+private fun Color.amoledShade(factor: Float): Color = Color(
+    red = red * factor,
+    green = green * factor,
+    blue = blue * factor,
+    alpha = alpha,
+)

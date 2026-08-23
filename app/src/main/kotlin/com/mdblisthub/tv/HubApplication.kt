@@ -43,6 +43,7 @@ class HubApplication : Application(), Configuration.Provider, SingletonImageLoad
         // SharedPreferences mirror instead of awaiting DataStore, so the main
         // thread is not parked on file I/O and protobuf parsing at the most
         // latency-sensitive point in the lifecycle. See `UiPreferencesStore`.
+        HubColors.applyAmoledMode(graph.uiPreferences.startupAmoledMode())
         HubColors.apply(
             runCatching { graph.uiPreferences.startupTheme() }
                 .getOrDefault(HubThemeVariant.NORMAL),

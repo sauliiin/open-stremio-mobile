@@ -8,10 +8,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
@@ -56,9 +60,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +94,7 @@ import com.mdblisthub.tv.core.ui.component.HubSectionLabel
 import com.mdblisthub.tv.core.ui.component.HubSettingRow
 import com.mdblisthub.tv.core.ui.component.HubToggle
 import com.mdblisthub.tv.ui.component.HubButton
+import com.mdblisthub.tv.ui.addons.AddonsScreen
 import com.mdblisthub.tv.ui.hubViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -121,6 +130,11 @@ data class SettingsUiState(
     val subtitleAutoDownload: Boolean = true,
     val subtitleLanguage: String = "pt",
     val subtitleColor: String = "white",
+    val subtitleTextOpacity: Int = 100,
+    val subtitleBackgroundEnabled: Boolean = false,
+    val subtitleBackgroundOpacity: Int = 40,
+    val amoledMode: Boolean = false,
+    val autotrailer: Boolean = false,
     val audioLanguage: String = "en",
     val libraryProvider: LibraryProvider = LibraryProvider.MDBLIST,
     val dimUnwatchedEpisodes: Boolean = false,
@@ -153,7 +167,13 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
                 graph.uiPreferences.subtitleColor,
                 graph.uiPreferences.audioLanguage,
             ) { lang, subAuto, subLang, subColor, audioLang ->
-                SettingsUiState(lang, subAuto, subLang, subColor, audioLang)
+                SettingsUiState(
+                    language = lang,
+                    subtitleAutoDownload = subAuto,
+                    subtitleLanguage = subLang,
+                    subtitleColor = subColor,
+                    audioLanguage = audioLang,
+                )
             }
                 .combine(graph.uiPreferences.libraryProvider) { partial, provider ->
                     partial.copy(libraryProvider = provider)
@@ -175,6 +195,21 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
                 }
                 .combine(graph.auth.isMdblistOnly) { partial, mdblistOnly ->
                     partial.copy(mdblistOnly = mdblistOnly)
+                }
+                .combine(graph.uiPreferences.subtitleTextOpacity) { partial, value ->
+                    partial.copy(subtitleTextOpacity = value)
+                }
+                .combine(graph.uiPreferences.subtitleBackgroundEnabled) { partial, value ->
+                    partial.copy(subtitleBackgroundEnabled = value)
+                }
+                .combine(graph.uiPreferences.subtitleBackgroundOpacity) { partial, value ->
+                    partial.copy(subtitleBackgroundOpacity = value)
+                }
+                .combine(graph.uiPreferences.amoledMode) { partial, value ->
+                    partial.copy(amoledMode = value)
+                }
+                .combine(graph.uiPreferences.autotrailer) { partial, value ->
+                    partial.copy(autotrailer = value)
                 }
                 .collect { _state.value = it }
         }
@@ -257,14 +292,37 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
     fun toggleSubtitleAutoDownload() = viewModelScope.launch { graph.uiPreferences.saveSubtitleAutoDownload(!_state.value.subtitleAutoDownload) }
     fun setSubtitleLanguage(lang: String) = viewModelScope.launch { graph.uiPreferences.saveSubtitleLanguage(lang) }
     fun setSubtitleColor(color: String) = viewModelScope.launch { graph.uiPreferences.saveSubtitleColor(color) }
+    fun setSubtitleTextOpacity(value: Int) = viewModelScope.launch { graph.uiPreferences.saveSubtitleTextOpacity(value) }
+    fun toggleSubtitleBackground() = viewModelScope.launch {
+        graph.uiPreferences.saveSubtitleBackgroundEnabled(!_state.value.subtitleBackgroundEnabled)
+    }
+    fun setSubtitleBackgroundOpacity(value: Int) = viewModelScope.launch {
+        graph.uiPreferences.saveSubtitleBackgroundOpacity(value)
+    }
     fun setAudioLanguage(lang: String) = viewModelScope.launch { graph.uiPreferences.saveAudioLanguage(lang) }
     fun toggleDimUnwatchedEpisodes() = viewModelScope.launch { graph.uiPreferences.saveDimUnwatchedEpisodes(!_state.value.dimUnwatchedEpisodes) }
 
     // The bottom nav dropped its own theme-cycle button once this section
     // existed to pick one deliberately instead — see BottomNavBar.
     fun setTheme(target: HubThemeVariant) {
-        HubColors.apply(target)
-        viewModelScope.launch { graph.uiPreferences.saveTheme(target) }
+        val actual = when {
+            _state.value.autotrailer && target == HubThemeVariant.NETFLIXY -> HubThemeVariant.CYBERFLIX
+            _state.value.autotrailer && target == HubThemeVariant.PRIMEFLY -> HubThemeVariant.OPTIMUS_PRIME
+            else -> target
+        }
+        HubColors.apply(actual)
+        viewModelScope.launch { graph.uiPreferences.saveTheme(actual) }
+    }
+
+    fun toggleAmoledMode() {
+        val enabled = !_state.value.amoledMode
+        HubColors.applyAmoledMode(enabled)
+        viewModelScope.launch { graph.uiPreferences.saveAmoledMode(enabled) }
+    }
+
+    fun toggleAutotrailer() = viewModelScope.launch {
+        graph.uiPreferences.saveAutotrailer(!_state.value.autotrailer)
+        HubColors.apply(graph.uiPreferences.currentTheme())
     }
 
     fun signOut(onDone: () -> Unit) {
@@ -291,6 +349,7 @@ private enum class SettingsDestination(
     LIBRARY(R.string.settings_page_library, R.string.settings_page_library_description),
     SUBTITLES(R.string.settings_page_subtitles, R.string.settings_page_subtitles_description),
     PLAYBACK(R.string.settings_page_playback, R.string.settings_page_playback_description),
+    ADDONS(R.string.menu_addons, R.string.settings_page_addons_description),
     ABOUT(R.string.settings_page_about, R.string.settings_page_about_description),
 }
 
@@ -305,6 +364,7 @@ private fun SettingsDestination.icon(): ImageVector = when (this) {
     SettingsDestination.LIBRARY -> Icons.AutoMirrored.Filled.LibraryBooks
     SettingsDestination.SUBTITLES -> Icons.Default.Subtitles
     SettingsDestination.PLAYBACK -> Icons.Default.PlayCircle
+    SettingsDestination.ADDONS -> Icons.Default.Extension
     SettingsDestination.ABOUT -> Icons.Default.Info
 }
 
@@ -361,6 +421,7 @@ fun SettingsScreen(
                         .background(HubColors.Border.copy(alpha = 0.72f)),
                 )
                 SettingsPagePane(
+                    graph = graph,
                     destination = effectiveDestination,
                     state = state,
                     viewModel = viewModel,
@@ -388,6 +449,7 @@ fun SettingsScreen(
                     )
                 } else {
                     SettingsPagePane(
+                        graph = graph,
                         destination = target,
                         state = state,
                         viewModel = viewModel,
@@ -573,6 +635,7 @@ private fun SettingsSearchField(
 
 @Composable
 private fun SettingsPagePane(
+    graph: DataGraph,
     destination: SettingsDestination,
     state: SettingsUiState,
     viewModel: SettingsViewModel,
@@ -583,6 +646,10 @@ private fun SettingsPagePane(
     onRequestSignOut: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    if (destination == SettingsDestination.ADDONS) {
+        AddonsScreen(graph = graph, onBack = onBack)
+        return
+    }
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(
@@ -636,9 +703,10 @@ private fun SettingsPagePane(
                                 HubThemeVariant.NETFLIXY to stringResource(R.string.menu_theme_netflixy),
                                 HubThemeVariant.PRIMEFLY to stringResource(R.string.menu_theme_primefly),
                             ).forEach { (variant, label) ->
-                                HubButton(
-                                    text = label,
-                                    primary = HubColors.variant == variant,
+                                ThemePreviewChoice(
+                                    variant = variant,
+                                    label = label,
+                                    selected = themeBase(HubColors.variant) == variant,
                                     onClick = { viewModel.setTheme(variant) },
                                 )
                             }
@@ -670,6 +738,27 @@ private fun SettingsPagePane(
                                 )
                             }
                         }
+                    }
+                }
+                item(key = "appearance-options") {
+                    ModernSettingsGroup(stringResource(R.string.settings_appearance_options)) {
+                        HubSettingRow(
+                            title = stringResource(R.string.settings_amoled_mode),
+                            description = stringResource(R.string.settings_amoled_mode_description),
+                            trailing = {
+                                HubToggle(state.amoledMode, { viewModel.toggleAmoledMode() })
+                            },
+                            onClick = viewModel::toggleAmoledMode,
+                        )
+                        SettingsDivider()
+                        HubSettingRow(
+                            title = stringResource(R.string.settings_autotrailer),
+                            description = stringResource(R.string.settings_autotrailer_description),
+                            trailing = {
+                                HubToggle(state.autotrailer, { viewModel.toggleAutotrailer() })
+                            },
+                            onClick = viewModel::toggleAutotrailer,
+                        )
                     }
                 }
             }
@@ -759,10 +848,7 @@ private fun SettingsPagePane(
                         onClick = onOpenSubtitlePicker,
                     )
                     SettingsDivider()
-                    HubSettingRow(
-                        title = stringResource(R.string.settings_subtitle_color),
-                        description = state.subtitleColor.replaceFirstChar(Char::uppercase),
-                    )
+                    HubSettingRow(title = stringResource(R.string.settings_subtitle_color))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -771,17 +857,40 @@ private fun SettingsPagePane(
                         horizontalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
                     ) {
                         listOf(
-                            "yellow" to stringResource(R.string.color_yellow),
-                            "white" to stringResource(R.string.color_white),
-                            "red" to stringResource(R.string.color_red),
-                            "blue" to stringResource(R.string.color_blue),
-                        ).forEach { (code, label) ->
-                            HubButton(
-                                text = label,
-                                primary = state.subtitleColor == code,
+                            "yellow" to Color.Yellow,
+                            "white" to Color.White,
+                            "red" to Color.Red,
+                            "blue" to Color.Blue,
+                            "black" to Color.Black,
+                        ).forEach { (code, color) ->
+                            SubtitleColorChoice(
+                                color = color,
+                                selected = state.subtitleColor == code,
                                 onClick = { viewModel.setSubtitleColor(code) },
                             )
                         }
+                    }
+                    SettingsDivider()
+                    OpacitySetting(
+                        label = stringResource(R.string.settings_subtitle_text_opacity),
+                        value = state.subtitleTextOpacity,
+                        onValueChange = viewModel::setSubtitleTextOpacity,
+                    )
+                    SettingsDivider()
+                    HubSettingRow(
+                        title = stringResource(R.string.settings_subtitle_background),
+                        description = stringResource(if (state.subtitleBackgroundEnabled) R.string.settings_on else R.string.settings_off),
+                        trailing = {
+                            HubToggle(state.subtitleBackgroundEnabled, { viewModel.toggleSubtitleBackground() })
+                        },
+                        onClick = viewModel::toggleSubtitleBackground,
+                    )
+                    if (state.subtitleBackgroundEnabled) {
+                        OpacitySetting(
+                            label = stringResource(R.string.settings_subtitle_background_opacity),
+                            value = state.subtitleBackgroundOpacity,
+                            onValueChange = viewModel::setSubtitleBackgroundOpacity,
+                        )
                     }
                 }
             }
@@ -854,6 +963,8 @@ private fun SettingsPagePane(
                 }
             }
 
+            SettingsDestination.ADDONS -> Unit
+
             SettingsDestination.ROOT -> Unit
         }
     }
@@ -867,6 +978,116 @@ private fun ModernSettingsGroup(
     Column(verticalArrangement = Arrangement.spacedBy(HubTokens.Space.sm)) {
         HubSectionLabel(text = title, modifier = Modifier.padding(horizontal = HubTokens.Space.xs))
         HubGlassCard(content = content)
+    }
+}
+
+private fun themeBase(variant: HubThemeVariant): HubThemeVariant = when (variant) {
+    HubThemeVariant.CYBERFLIX -> HubThemeVariant.NETFLIXY
+    HubThemeVariant.OPTIMUS_PRIME -> HubThemeVariant.PRIMEFLY
+    else -> variant
+}
+
+@Composable
+private fun ThemePreviewChoice(
+    variant: HubThemeVariant,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val preview = when (variant) {
+        HubThemeVariant.NORMAL -> R.drawable.theme_normal_preview
+        HubThemeVariant.CYBERPUNK -> R.drawable.theme_cyberpunk_preview
+        HubThemeVariant.NETFLIXY, HubThemeVariant.CYBERFLIX -> R.drawable.theme_netflixy_preview
+        HubThemeVariant.PRIMEFLY, HubThemeVariant.OPTIMUS_PRIME -> R.drawable.theme_primefly_preview
+    }
+    Column(
+        modifier = Modifier
+            .width(150.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(HubColors.Surface)
+            .border(if (selected) 3.dp else 1.dp, if (selected) HubColors.Accent else HubColors.Border, RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Image(
+            painter = painterResource(preview),
+            contentDescription = label,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(THEME_PREVIEW_ASPECT_RATIO)
+                .clip(RoundedCornerShape(12.dp)),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = HubColors.Text,
+            modifier = Modifier.padding(vertical = 8.dp),
+            maxLines = 1,
+        )
+    }
+}
+
+private const val THEME_PREVIEW_ASPECT_RATIO = 720f / 1600f
+
+@Composable
+private fun SubtitleColorChoice(
+    color: Color,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .border(
+                width = if (selected) 3.dp else 1.dp,
+                color = if (selected) HubColors.Accent else HubColors.Border,
+                shape = CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(30.dp)
+                .background(color, CircleShape)
+                .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+        )
+    }
+}
+
+@Composable
+private fun OpacitySetting(
+    label: String,
+    value: Int,
+    onValueChange: (Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = HubTokens.Space.lg, vertical = HubTokens.Space.sm),
+        verticalArrangement = Arrangement.spacedBy(HubTokens.Space.xs),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, color = HubColors.Text)
+            Text("${value.coerceIn(0, 100)}%", style = MaterialTheme.typography.bodyLarge, color = HubColors.AccentSoft)
+        }
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            factory = { context ->
+                android.widget.SeekBar(context).apply {
+                    max = 100
+                    setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                            if (fromUser) onValueChange(progress)
+                        }
+                        override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
+                        override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
+                    })
+                }
+            },
+            update = { if (it.progress != value) it.progress = value.coerceIn(0, 100) },
+        )
     }
 }
 

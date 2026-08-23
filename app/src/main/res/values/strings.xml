@@ -1,9 +1,27 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">OmniStream</string>
+    <string name="welcome_title">Welcome to OmniStream</string>
+    <string name="welcome_subtitle">Choose your home screen theme</string>
+    <string name="welcome_continue">Continue</string>
+    <string name="playback_notification_channel">Playback completed</string>
+    <string name="playback_notification_channel_description">Alerts when a movie or episode finishes</string>
+    <string name="playback_notification_movie_title">Movie finished</string>
+    <string name="playback_notification_episode_title">Episode finished</string>
+    <string name="playback_notification_episode_content">%1$s — %2$s</string>
     <string name="menu_home">Home</string>
     <string name="menu_search">Search</string>
     <string name="menu_addons">Addons</string>
+    <string name="settings_page_addons_description">Manage installed addons and catalog sources</string>
+    <string name="settings_appearance_options">Appearance options</string>
+    <string name="settings_amoled_mode">AMOLED mode</string>
+    <string name="settings_amoled_mode_description">Use pure black for app backgrounds</string>
+    <string name="settings_autotrailer">Automatic trailers</string>
+    <string name="settings_autotrailer_description">Play previews in Cyberflix and Optimus Prime themes</string>
+    <string name="settings_subtitle_text_opacity">Text opacity</string>
+    <string name="settings_subtitle_background">Black background</string>
+    <string name="settings_subtitle_background_opacity">Background opacity</string>
+    <string name="color_black">Black</string>
     <string name="menu_lists">Lists</string>
     <string name="menu_lists_done">Done</string>
     <string name="menu_theme_normal">Normal</string>
@@ -148,6 +166,7 @@
     <!-- Home: continue watching -->
     <string name="home_resume_row">Continue watching</string>
     <string name="home_because_you_watched">Because you watched %1$s</string>
+    <string name="home_view_details">View details</string>
     <string name="home_type_show">Series</string>
     <string name="home_type_movie">Movie</string>
     <string name="home_minutes">%1$d min</string>

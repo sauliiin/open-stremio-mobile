@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
@@ -46,6 +47,7 @@ import com.mdblisthub.tv.ui.login.LoginScreen
 import com.mdblisthub.tv.ui.player.PlayerScreen
 import com.mdblisthub.tv.ui.search.SearchScreen
 import com.mdblisthub.tv.ui.settings.SettingsScreen
+import com.mdblisthub.tv.ui.welcome.WelcomeScreen
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -55,8 +57,10 @@ import dev.chrisbanes.haze.rememberHazeState
 
 object Routes {
     const val LOGIN = "login"
+    const val WELCOME = "welcome"
     const val HOME = "home"
     const val SEARCH = "search"
+    const val LISTS = "lists"
     const val ADDONS = "addons"
     const val SETTINGS = "settings"
     const val DETAIL = "detail/{type}/{tmdbId}"
@@ -120,7 +124,9 @@ fun HubNavHost(graph: DataGraph) {
         graph.listPreferencesSync.restore()
         graph.firebaseSync.restore()
         graph.scheduler.syncNow()
-        startDestination = if (graph.auth.signedIn.first()) Routes.HOME else Routes.LOGIN
+        startDestination = if (graph.auth.signedIn.first()) {
+            if (graph.uiPreferences.setupCompleted.first()) Routes.HOME else Routes.WELCOME
+        } else Routes.LOGIN
     }
 
     val start = startDestination
@@ -164,7 +170,7 @@ fun HubNavHost(graph: DataGraph) {
         val currentEntry by navController.currentBackStackEntryAsState()
         val currentRoute = currentEntry?.destination?.route
         val rootRoutes = remember {
-            setOf(Routes.HOME, Routes.SEARCH, Routes.ADDONS, Routes.SETTINGS)
+            setOf(Routes.HOME, Routes.SEARCH, Routes.LISTS, Routes.SETTINGS)
         }
         val showRootNavigation = currentRoute in rootRoutes
         val navBarState = rememberHubNavBarScrollState()
@@ -172,7 +178,7 @@ fun HubNavHost(graph: DataGraph) {
         val rootItems = listOf(
             RailItem(Routes.HOME, stringResource(R.string.menu_home), Icons.Default.Home),
             RailItem(Routes.SEARCH, stringResource(R.string.menu_search), Icons.Default.Search),
-            RailItem(Routes.ADDONS, stringResource(R.string.menu_addons), Icons.Default.Extension),
+            RailItem(Routes.LISTS, stringResource(R.string.menu_lists), Icons.AutoMirrored.Filled.LibraryBooks),
             RailItem(Routes.SETTINGS, stringResource(R.string.menu_settings), Icons.Default.Settings),
         )
 
@@ -202,11 +208,22 @@ fun HubNavHost(graph: DataGraph) {
             LoginScreen(
                 graph = graph,
                 onSignedIn = {
-                    navController.navigate(Routes.HOME) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
+                    artworkScope.launch {
+                        val target = if (graph.uiPreferences.setupCompleted.first()) Routes.HOME else Routes.WELCOME
+                        navController.navigate(target) {
+                            popUpTo(Routes.LOGIN) { inclusive = true }
+                        }
                     }
                 },
             )
+        }
+
+        composable(Routes.WELCOME) {
+            WelcomeScreen(graph = graph) {
+                navController.navigate(Routes.HOME) {
+                    popUpTo(Routes.WELCOME) { inclusive = true }
+                }
+            }
         }
 
         composable(Routes.HOME) {
@@ -217,6 +234,16 @@ fun HubNavHost(graph: DataGraph) {
                 onResume = { point ->
                     navController.navigate(Routes.resume(point))
                 },
+            )
+        }
+
+        composable(Routes.LISTS) {
+            HomeScreen(
+                graph = graph,
+                onOpenTitle = openTitle,
+                onOpenAddons = { navController.navigate(Routes.ADDONS) },
+                onResume = { point -> navController.navigate(Routes.resume(point)) },
+                initialEditMode = true,
             )
         }
 

@@ -63,7 +63,12 @@ interface MdblistApi {
     ): MdbInfoDto
 
     @GET
-    suspend fun bucket(@Url url: String, @Query("apikey") apiKey: String): BucketResponseDto
+    suspend fun bucket(
+        @Url url: String,
+        @Query("apikey") apiKey: String,
+        @Query("limit") limit: Int = 1_000,
+        @Query("cursor") cursor: String? = null,
+    ): BucketResponseDto
 
     @POST
     suspend fun bucketWrite(
