@@ -17,7 +17,7 @@
     <string name="settings_amoled_mode">AMOLED mode</string>
     <string name="settings_amoled_mode_description">Use pure black for app backgrounds</string>
     <string name="settings_autotrailer">Automatic trailers</string>
-    <string name="settings_autotrailer_description">Play previews in Cyberflix and Optimus Prime themes</string>
+    <string name="settings_autotrailer_pip_description">Play focused-title previews with audio in a small window</string>
     <string name="settings_subtitle_text_opacity">Text opacity</string>
     <string name="settings_subtitle_background">Black background</string>
     <string name="settings_subtitle_background_opacity">Background opacity</string>

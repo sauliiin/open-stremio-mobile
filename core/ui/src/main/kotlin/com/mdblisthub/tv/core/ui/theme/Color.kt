@@ -47,11 +47,8 @@ object HubColors {
 
     val isCyberpunk: Boolean get() = variant == HubThemeVariant.CYBERPUNK
     val isNetflixy: Boolean get() = variant == HubThemeVariant.NETFLIXY
-    val isPrimefly: Boolean get() = variant == HubThemeVariant.PRIMEFLY || variant == HubThemeVariant.OPTIMUS_PRIME
-    val isCyberflix: Boolean get() = variant == HubThemeVariant.CYBERFLIX
-    val isOptimusPrime: Boolean get() = variant == HubThemeVariant.OPTIMUS_PRIME
-    val isNetflixLayout: Boolean get() = isNetflixy || isCyberflix
-    val hasHeroTrailer: Boolean get() = isCyberflix || isOptimusPrime
+    val isPrimefly: Boolean get() = variant == HubThemeVariant.PRIMEFLY
+    val isNetflixLayout: Boolean get() = isNetflixy
 
     var amoledMode by mutableStateOf(false)
         private set
@@ -88,7 +85,7 @@ object HubColors {
             }
             // Deep red-black surfaces keep the whole theme recognizably red,
             // while preserving enough contrast for artwork and white text.
-            HubThemeVariant.NETFLIXY, HubThemeVariant.CYBERFLIX -> {
+            HubThemeVariant.NETFLIXY -> {
                 Background = Color(0xFF080001)
                 Surface = Color(0xFF1A080A)
                 SurfaceStrong = Color(0xFF2B0C10)
@@ -101,7 +98,7 @@ object HubColors {
                 TextFaint = Color(0xFF808080)
             }
             // Prime Video-inspired navy surfaces with its signature cyan.
-            HubThemeVariant.PRIMEFLY, HubThemeVariant.OPTIMUS_PRIME -> {
+            HubThemeVariant.PRIMEFLY -> {
                 Background = Color(0xFF0F171E)
                 Surface = Color(0xFF1A242F)
                 SurfaceStrong = Color(0xFF243244)
@@ -141,8 +138,6 @@ object HubColors {
             HubThemeVariant.CYBERPUNK -> HubThemeVariant.NETFLIXY
             HubThemeVariant.NETFLIXY -> HubThemeVariant.PRIMEFLY
             HubThemeVariant.PRIMEFLY -> HubThemeVariant.NORMAL
-            HubThemeVariant.CYBERFLIX -> HubThemeVariant.OPTIMUS_PRIME
-            HubThemeVariant.OPTIMUS_PRIME -> HubThemeVariant.NORMAL
         }
         apply(next)
         return next
