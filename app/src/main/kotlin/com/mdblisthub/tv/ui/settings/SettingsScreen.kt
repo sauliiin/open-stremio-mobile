@@ -80,6 +80,7 @@ import androidx.tv.material3.Text
 import com.mdblisthub.tv.BuildConfig
 import com.mdblisthub.tv.R
 import com.mdblisthub.tv.core.data.DataGraph
+import com.mdblisthub.tv.core.data.repository.SimklLinkState
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import com.mdblisthub.tv.core.model.LibraryProvider
 import com.mdblisthub.tv.core.model.TraktAccount
@@ -141,6 +142,7 @@ data class SettingsUiState(
     val traktAccount: TraktAccount? = null,
     /** False when the build ships no Trakt client id — see `ApiConfig`. */
     val traktConfigured: Boolean = false,
+    val simklLinked: Boolean = false,
     val googleEmail: String? = null,
     val mdblistLinked: Boolean = false,
     val mdblistOnly: Boolean = false,
@@ -153,6 +155,8 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
     /** Non-null only while the device-link overlay is up. */
     private val _traktLink = MutableStateFlow<TraktLinkState?>(null)
     val traktLink = _traktLink.asStateFlow()
+    private val _simklLink = MutableStateFlow<SimklLinkState?>(null)
+    val simklLink = _simklLink.asStateFlow()
 
     private var linkJob: Job? = null
 
@@ -196,6 +200,9 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
                 .combine(graph.auth.isMdblistOnly) { partial, mdblistOnly ->
                     partial.copy(mdblistOnly = mdblistOnly)
                 }
+                .combine(graph.simklTokenStore.linked) { partial, linked ->
+                    partial.copy(simklLinked = linked)
+                }
                 .combine(graph.uiPreferences.subtitleTextOpacity) { partial, value ->
                     partial.copy(subtitleTextOpacity = value)
                 }
@@ -224,6 +231,10 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
         viewModelScope.launch {
             if (provider == LibraryProvider.TRAKT && _state.value.traktAccount == null) {
                 beginTraktLink()
+                return@launch
+            }
+            if (provider == LibraryProvider.SIMKL && !_state.value.simklLinked) {
+                beginSimklLink()
                 return@launch
             }
             graph.switchLibraryProvider(provider)
@@ -271,6 +282,39 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
     fun unlinkTrakt() {
         viewModelScope.launch {
             graph.unlinkTrakt()
+            refreshLibraryRows()
+        }
+    }
+
+    fun beginSimklLink() {
+        if (linkJob?.isActive == true) return
+        _simklLink.value = SimklLinkState.Requesting
+        linkJob = viewModelScope.launch {
+            runCatching { graph.simklAuth.start() }
+                .onSuccess { pin ->
+                    graph.simklAuth.poll(pin).collect { linkState ->
+                        _simklLink.value = linkState
+                        if (linkState is SimklLinkState.Linked) {
+                            graph.switchLibraryProvider(LibraryProvider.SIMKL)
+                            refreshLibraryRows()
+                            delay(LINKED_VISIBLE_MS)
+                            _simklLink.value = null
+                        }
+                    }
+                }
+                .onFailure { _simklLink.value = SimklLinkState.Failed }
+        }
+    }
+
+    fun dismissSimklLink() {
+        linkJob?.cancel()
+        linkJob = null
+        _simklLink.value = null
+    }
+
+    fun unlinkSimkl() {
+        viewModelScope.launch {
+            graph.unlinkSimkl()
             refreshLibraryRows()
         }
     }
@@ -371,6 +415,7 @@ fun SettingsScreen(
     val viewModel = hubViewModel { SettingsViewModel(graph) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val traktLink by viewModel.traktLink.collectAsStateWithLifecycle()
+    val simklLink by viewModel.simklLink.collectAsStateWithLifecycle()
 
     var destination by rememberSaveable { mutableStateOf(SettingsDestination.ROOT) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -389,6 +434,7 @@ fun SettingsScreen(
         BackHandler {
             when {
                 traktLink != null -> viewModel.dismissTraktLink()
+                simklLink != null -> viewModel.dismissSimklLink()
                 subtitlePickerOpen -> subtitlePickerOpen = false
                 audioPickerOpen -> audioPickerOpen = false
                 confirmSignOut -> confirmSignOut = false
@@ -480,6 +526,13 @@ fun SettingsScreen(
             state = link,
             onRetry = viewModel::beginTraktLink,
             onDismiss = viewModel::dismissTraktLink,
+        )
+    }
+    simklLink?.let { link ->
+        SimklLinkOverlay(
+            state = link,
+            onRetry = viewModel::beginSimklLink,
+            onDismiss = viewModel::dismissSimklLink,
         )
     }
     if (confirmSignOut) {
@@ -762,10 +815,10 @@ private fun SettingsPagePane(
                     HubSettingRow(
                         title = stringResource(R.string.settings_library_provider),
                         description = stringResource(
-                            if (state.libraryProvider == LibraryProvider.TRAKT) {
-                                R.string.settings_library_trakt
-                            } else {
-                                R.string.settings_library_mdblist
+                            when (state.libraryProvider) {
+                                LibraryProvider.MDBLIST -> R.string.settings_library_mdblist
+                                LibraryProvider.TRAKT -> R.string.settings_library_trakt
+                                LibraryProvider.SIMKL -> R.string.settings_library_provider_simkl
                             },
                         ),
                     )
@@ -782,6 +835,11 @@ private fun SettingsPagePane(
                             text = stringResource(R.string.settings_library_trakt),
                             primary = state.libraryProvider == LibraryProvider.TRAKT,
                             onClick = { viewModel.setLibraryProvider(LibraryProvider.TRAKT) },
+                        )
+                        HubButton(
+                            text = stringResource(R.string.settings_library_simkl),
+                            primary = state.libraryProvider == LibraryProvider.SIMKL,
+                            onClick = { viewModel.setLibraryProvider(LibraryProvider.SIMKL) },
                         )
                     }
                     SettingsDivider()
@@ -811,6 +869,24 @@ private fun SettingsPagePane(
                                 ),
                                 primary = state.traktAccount == null,
                                 onClick = if (state.traktAccount == null) viewModel::beginTraktLink else viewModel::unlinkTrakt,
+                            )
+                        },
+                    )
+                    SettingsDivider()
+                    HubSettingRow(
+                        title = stringResource(
+                            if (state.simklLinked) R.string.settings_simkl_connected else R.string.settings_simkl_not_connected,
+                        ),
+                        description = stringResource(
+                            if (state.simklLinked) R.string.settings_simkl_disconnect else R.string.settings_simkl_connect,
+                        ),
+                        trailing = {
+                            HubButton(
+                                text = stringResource(
+                                    if (state.simklLinked) R.string.settings_simkl_disconnect else R.string.settings_simkl_connect,
+                                ),
+                                primary = !state.simklLinked,
+                                onClick = if (state.simklLinked) viewModel::unlinkSimkl else viewModel::beginSimklLink,
                             )
                         },
                     )
@@ -1236,6 +1312,7 @@ private fun LegacySettingsScreen(graph: DataGraph, onBack: () -> Unit) {
                     val providers = listOf(
                         LibraryProvider.MDBLIST to stringResource(R.string.settings_library_mdblist),
                         LibraryProvider.TRAKT to stringResource(R.string.settings_library_trakt),
+                        LibraryProvider.SIMKL to stringResource(R.string.settings_library_simkl),
                     )
                     providers.forEach { (provider, name) ->
                         HubButton(
@@ -1272,6 +1349,20 @@ private fun LegacySettingsScreen(graph: DataGraph, onBack: () -> Unit) {
                             onClick = viewModel::unlinkTrakt,
                         )
                     }
+                }
+
+                SettingsRow(
+                    label = stringResource(
+                        if (state.simklLinked) R.string.settings_simkl_connected else R.string.settings_simkl_not_connected,
+                    ),
+                ) {
+                    HubButton(
+                        text = stringResource(
+                            if (state.simklLinked) R.string.settings_simkl_disconnect else R.string.settings_simkl_connect,
+                        ),
+                        primary = !state.simklLinked,
+                        onClick = if (state.simklLinked) viewModel::unlinkSimkl else viewModel::beginSimklLink,
+                    )
                 }
             }
         }

@@ -131,6 +131,8 @@ fun MediaRow(
      * every other row's simpler, already-correct `(MediaItem) -> Unit`.
      */
     onItemClickIndexed: ((Int, MediaItem) -> Unit)? = null,
+    /** Indexed tap callback with the card geometry, for contextual action overlays. */
+    onItemClickIndexedWithAnchor: ((Int, MediaItem, PosterCardAnchor) -> Unit)? = null,
     /** Held OK on a card — see [PosterCard]. Indexed for the same reason as above. */
     onItemLongClickIndexed: ((Int, MediaItem, PosterCardAnchor) -> Unit)? = null,
     progressPercent: ((Int, MediaItem) -> Float?)? = null,
@@ -238,6 +240,9 @@ fun MediaRow(
                         },
                         onClick = {
                             onItemClickIndexed?.invoke(index, item) ?: onItemClick(item)
+                        },
+                        onClickWithAnchor = onItemClickIndexedWithAnchor?.let { handler ->
+                            { anchor -> handler(index, item, anchor) }
                         },
                         onFocused = { focused ->
                             onItemFocused(focused)

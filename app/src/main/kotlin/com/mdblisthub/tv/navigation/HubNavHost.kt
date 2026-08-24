@@ -167,6 +167,22 @@ fun HubNavHost(graph: DataGraph) {
             )
             navController.navigate(Routes.detail(item.type, item.tmdbId))
         }
+        val playItem: (MediaItem, Int?, Int?) -> Unit = { item, season, episode ->
+            if (item.type == MediaType.SHOW && season == null) {
+                openTitle(item)
+            } else {
+                navController.navigate(Routes.player(item.type, item.tmdbId, season, episode))
+            }
+        }
+        val chooseItemSource: (MediaItem, Int?, Int?) -> Unit = { item, season, episode ->
+            if (item.type == MediaType.SHOW && (season == null || episode == null)) {
+                openTitle(item)
+            } else {
+                navController.navigate(
+                    Routes.player(item.type, item.tmdbId, season, episode, select = true),
+                )
+            }
+        }
         val currentEntry by navController.currentBackStackEntryAsState()
         val currentRoute = currentEntry?.destination?.route
         val rootRoutes = remember {
@@ -234,6 +250,8 @@ fun HubNavHost(graph: DataGraph) {
                 onResume = { point ->
                     navController.navigate(Routes.resume(point))
                 },
+                onPlay = playItem,
+                onChooseSource = chooseItemSource,
             )
         }
 
@@ -243,6 +261,8 @@ fun HubNavHost(graph: DataGraph) {
                 onOpenTitle = openTitle,
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
                 onResume = { point -> navController.navigate(Routes.resume(point)) },
+                onPlay = playItem,
+                onChooseSource = chooseItemSource,
                 initialEditMode = true,
             )
         }
@@ -267,6 +287,14 @@ fun HubNavHost(graph: DataGraph) {
             SearchScreen(
                 graph = graph,
                 onOpenTitle = openTitle,
+                onPlay = { item ->
+                    if (item.type == MediaType.SHOW) openTitle(item)
+                    else navController.navigate(Routes.player(item.type, item.tmdbId))
+                },
+                onChooseSource = { item ->
+                    if (item.type == MediaType.SHOW) openTitle(item)
+                    else navController.navigate(Routes.player(item.type, item.tmdbId, select = true))
+                },
             )
         }
 
@@ -300,6 +328,14 @@ fun HubNavHost(graph: DataGraph) {
                     )
                 },
                 onOpenTitle = openTitle,
+                onPlayItem = { item ->
+                    if (item.type == MediaType.SHOW) openTitle(item)
+                    else navController.navigate(Routes.player(item.type, item.tmdbId))
+                },
+                onChooseSourceForItem = { item ->
+                    if (item.type == MediaType.SHOW) openTitle(item)
+                    else navController.navigate(Routes.player(item.type, item.tmdbId, select = true))
+                },
             )
         }
 

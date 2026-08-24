@@ -51,6 +51,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -91,6 +96,7 @@ import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.CastMember
 import com.mdblisthub.tv.core.model.Episode
 import com.mdblisthub.tv.core.model.LibraryBucket
+import com.mdblisthub.tv.core.model.LibraryProvider
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.model.MediaType
 import com.mdblisthub.tv.core.model.PersonSummary
@@ -100,6 +106,9 @@ import com.mdblisthub.tv.core.ui.component.FanartBackdrop
 import com.mdblisthub.tv.core.ui.component.HubSpinner
 import com.mdblisthub.tv.core.ui.component.HubSkeletonBlock
 import com.mdblisthub.tv.core.ui.component.MediaRow
+import com.mdblisthub.tv.core.ui.component.PosterActionOverlayHost
+import com.mdblisthub.tv.core.ui.component.PosterOverlayAction
+import com.mdblisthub.tv.core.ui.component.PosterOverlayRequest
 import com.mdblisthub.tv.core.ui.component.RatingBadges
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
@@ -125,6 +134,8 @@ fun DetailScreen(
     onSelectSource: (season: Int?, episode: Int?) -> Unit,
     onOffline: (season: Int?, episode: Int?) -> Unit,
     onOpenTitle: (MediaItem) -> Unit,
+    onPlayItem: (MediaItem) -> Unit,
+    onChooseSourceForItem: (MediaItem) -> Unit,
 ) {
     val viewModel = hubViewModel(key = "detail-$type-$tmdbId") {
         DetailViewModel(graph, type, tmdbId)
@@ -136,12 +147,21 @@ fun DetailScreen(
     val watchedEpisodes by viewModel.watchedEpisodes.collectAsStateWithLifecycle()
     val dimUnwatchedEpisodes by viewModel.dimUnwatchedEpisodes.collectAsStateWithLifecycle()
     val library by viewModel.library.collectAsStateWithLifecycle()
+    val watchedIds by graph.library.observeBucket(LibraryBucket.WATCHED)
+        .collectAsStateWithLifecycle(initialValue = emptySet())
+    val libraryProvider by graph.uiPreferences.libraryProvider
+        .collectAsStateWithLifecycle(initialValue = LibraryProvider.MDBLIST)
     val resumePoint by viewModel.resumePoint.collectAsStateWithLifecycle()
     val pending by viewModel.pending.collectAsStateWithLifecycle()
     val libraryError by viewModel.libraryError.collectAsStateWithLifecycle()
     val castBio by viewModel.castBio.collectAsStateWithLifecycle()
     val offline by viewModel.offline.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val optionPlayLabel = stringResource(R.string.media_options_play)
+    val optionSourceLabel = stringResource(R.string.media_options_select_source)
+    val optionInfoLabel = stringResource(R.string.media_options_info)
+    val optionWatchedLabel = stringResource(R.string.media_options_mark_watched)
+    val optionUnwatchedLabel = stringResource(R.string.media_options_mark_unwatched)
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var buttonRowHadFocus by remember { mutableStateOf(false) }
@@ -391,12 +411,14 @@ fun DetailScreen(
                             onClick = viewModel::toggleWatchlist,
                             modifier = Modifier.fillMaxHeight(),
                         )
-                        HubButton(
-                            text = if (library.collection) stringResource(R.string.detail_in_collection) else stringResource(R.string.detail_add_collection),
-                            enabled = LibraryBucket.COLLECTION !in pending,
-                            onClick = viewModel::toggleCollection,
-                            modifier = Modifier.fillMaxHeight(),
-                        )
+                        if (libraryProvider != LibraryProvider.SIMKL) {
+                            HubButton(
+                                text = if (library.collection) stringResource(R.string.detail_in_collection) else stringResource(R.string.detail_add_collection),
+                                enabled = LibraryBucket.COLLECTION !in pending,
+                                onClick = viewModel::toggleCollection,
+                                modifier = Modifier.fillMaxHeight(),
+                            )
+                        }
                         HubButton(
                             text = if (library.watched) stringResource(R.string.detail_watched) else stringResource(R.string.detail_mark_watched),
                             enabled = LibraryBucket.WATCHED !in pending,
@@ -491,6 +513,34 @@ fun DetailScreen(
                         title = stringResource(R.string.detail_recommendations),
                         items = current.recommendations,
                         onItemClick = onOpenTitle,
+                        isWatched = { _, item -> item.tmdbId in watchedIds },
+                        onItemLongClickIndexed = { _, item, anchor ->
+                            val watched = item.tmdbId in watchedIds
+                            PosterActionOverlayHost.show(
+                                PosterOverlayRequest(
+                                    anchor = anchor,
+                                    title = item.title,
+                                    actions = listOf(
+                                        PosterOverlayAction(
+                                            optionPlayLabel,
+                                            Icons.Default.PlayArrow,
+                                        ) { onPlayItem(item) },
+                                        PosterOverlayAction(
+                                            optionSourceLabel,
+                                            Icons.Default.Tune,
+                                        ) { onChooseSourceForItem(item) },
+                                        PosterOverlayAction(
+                                            optionInfoLabel,
+                                            Icons.Default.Info,
+                                        ) { onOpenTitle(item) },
+                                        PosterOverlayAction(
+                                            if (watched) optionUnwatchedLabel else optionWatchedLabel,
+                                            if (watched) Icons.Default.Undo else Icons.Default.CheckCircle,
+                                        ) { viewModel.setWatched(item, !watched) },
+                                    ),
+                                ),
+                            )
+                        },
                     )
                 }
             }

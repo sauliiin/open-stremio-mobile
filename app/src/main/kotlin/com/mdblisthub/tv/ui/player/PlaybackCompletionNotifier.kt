@@ -11,6 +11,7 @@ import android.content.res.Configuration
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.mdblisthub.tv.MainActivity
 import com.mdblisthub.tv.R
 import com.mdblisthub.tv.core.model.MediaType
@@ -28,7 +29,13 @@ class PlaybackCompletionNotifier(
     private val delivered = AtomicBoolean(false)
 
     fun show(title: String, episodeLabel: String?, languageTag: String) {
-        if (!delivered.compareAndSet(false, true) || !canNotify(appContext)) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+        if (!delivered.compareAndSet(false, true)) return
         val localized = appContext.createConfigurationContext(
             Configuration(appContext.resources.configuration).apply {
                 setLocale(Locale.forLanguageTag(languageTag))
@@ -60,8 +67,12 @@ class PlaybackCompletionNotifier(
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
-        NotificationManagerCompat.from(appContext)
-            .notify(listOf(type, tmdbId, season, episode).hashCode(), notification)
+        try {
+            NotificationManagerCompat.from(appContext)
+                .notify(listOf(type, tmdbId, season, episode).hashCode(), notification)
+        } catch (_: SecurityException) {
+            delivered.set(false)
+        }
     }
 
     companion object {
@@ -77,8 +88,5 @@ class PlaybackCompletionNotifier(
             context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
 
-        private fun canNotify(context: Context): Boolean =
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 }

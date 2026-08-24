@@ -10,7 +10,7 @@ import coil3.disk.directory
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.ImageRequest
-import coil3.request.crossfade
+import coil3.request.transitionFactory
 import coil3.PlatformContext as CoilPlatformContext
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.data.work.HubWorkerFactory
@@ -19,8 +19,12 @@ import com.mdblisthub.tv.core.data.work.ImageWarmer
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import com.mdblisthub.tv.core.network.ApiConfig
 import com.mdblisthub.tv.core.ui.theme.HubColors
+import com.mdblisthub.tv.core.ui.coil.AlwaysCrossfadeTransitionFactory
 import com.mdblisthub.tv.player.OfflineDownloads
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import okio.Path.Companion.toOkioPath
 
 class HubApplication : Application(), Configuration.Provider, SingletonImageLoader.Factory {
@@ -53,10 +57,17 @@ class HubApplication : Application(), Configuration.Provider, SingletonImageLoad
         // OkHttp client — one connection pool for artwork and metadata alike.
         graph.imageWarmer = ImageWarmer { urls ->
             val loader = SingletonImageLoader.get(this)
-            urls.forEach { url ->
-                loader.execute(ImageRequest.Builder(this).data(url).build())
+            coroutineScope {
+                urls.map { url ->
+                    async {
+                        loader.execute(
+                            ImageRequest.Builder(this@HubApplication).data(url).build(),
+                        )
+                    }
+                }.awaitAll()
             }
         }
+        graph.warmHomeArtworkDuringIntro()
 
         graph.imageMemoryTrimmer = CoilMemoryTrimmer(this)
 
@@ -88,7 +99,7 @@ class HubApplication : Application(), Configuration.Provider, SingletonImageLoad
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .components {
-                add(OkHttpNetworkFetcherFactory(callFactory = { graph.network.metadataClient }))
+                add(OkHttpNetworkFetcherFactory(callFactory = { graph.network.imageClient }))
             }
             .memoryCache {
                 MemoryCache.Builder().maxSizePercent(context, 0.25).build()
@@ -99,7 +110,7 @@ class HubApplication : Application(), Configuration.Provider, SingletonImageLoad
                     .maxSizeBytes(512L * 1024 * 1024)
                     .build()
             }
-            .crossfade(true)
+            .transitionFactory(AlwaysCrossfadeTransitionFactory())
             .build()
 }
 
