@@ -386,7 +386,7 @@
     <string name="settings_page_appearance">Apariencia</string>
     <string name="settings_page_appearance_description">Tema, identidad de color e idioma de la aplicación</string>
     <string name="settings_page_library">Biblioteca</string>
-    <string name="settings_page_library_description">Historial, proveedor y conexión con Trakt</string>
+    <string name="settings_page_library_description">Historial, proveedor y servicios conectados</string>
     <string name="settings_page_subtitles">Subtítulos</string>
     <string name="settings_page_subtitles_description">Descarga automática, idioma y color</string>
     <string name="settings_page_playback">Reproducción</string>
@@ -403,4 +403,21 @@
     <string name="settings_version_format">Versión %1$s (%2$d)</string>
     <string name="settings_open_source_title">Código abierto</string>
     <string name="settings_open_source_description">OmniStream se distribuye bajo GPL-3.0 e incluye componentes de código abierto con atribución.</string>
+    <string name="settings_library_provider_simkl">Watchlist, vistos y continuar viendo</string>
+    <string name="settings_library_simkl">Simkl</string>
+    <string name="settings_simkl_not_connected">Ninguna cuenta Simkl conectada</string>
+    <string name="settings_simkl_connect">Conectar Simkl</string>
+    <string name="settings_simkl_connected">Cuenta Simkl conectada</string>
+    <string name="settings_simkl_disconnect">Desconectar</string>
+    <string name="simkl_link_title">Conectar a Simkl</string>
+    <string name="simkl_link_requesting">Solicitando un código…</string>
+    <string name="simkl_link_instruction">Abre %1$s en el móvil e introduce:</string>
+    <string name="simkl_link_expires">Expira en %1$d:%2$02d</string>
+    <string name="simkl_link_connected">Simkl conectado</string>
+    <string name="simkl_link_failed">No se pudo conectar a Simkl.</string>
+    <string name="media_options_play">Reproducir</string>
+    <string name="media_options_select_source">Seleccionar fuente</string>
+    <string name="media_options_info">Información</string>
+    <string name="media_options_mark_watched">Marcar como visto</string>
+    <string name="media_options_mark_unwatched">Marcar como no visto</string>
 </resources>

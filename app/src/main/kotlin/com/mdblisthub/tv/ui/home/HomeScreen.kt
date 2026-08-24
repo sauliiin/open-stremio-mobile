@@ -31,6 +31,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -62,8 +67,10 @@ import androidx.compose.ui.res.stringResource
 import com.mdblisthub.tv.R
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.MediaItem
+import com.mdblisthub.tv.core.model.MediaType
 import com.mdblisthub.tv.core.model.MediaList
 import com.mdblisthub.tv.core.model.MdblistHomeFeed
+import com.mdblisthub.tv.core.model.MdblistHomeFeedKeys
 import com.mdblisthub.tv.core.model.AddonCatalog
 import com.mdblisthub.tv.core.model.ResumePoint
 import com.mdblisthub.tv.core.ui.component.FanartBackdrop
@@ -71,6 +78,7 @@ import com.mdblisthub.tv.core.ui.component.HubGlassCard
 import com.mdblisthub.tv.core.ui.component.HubSkeletonBlock
 import com.mdblisthub.tv.core.ui.component.MediaRow
 import com.mdblisthub.tv.core.ui.component.PosterActionOverlayHost
+import com.mdblisthub.tv.core.ui.component.PosterCardAnchor
 import com.mdblisthub.tv.core.ui.component.PosterOverlayAction
 import com.mdblisthub.tv.core.ui.component.PosterOverlayRequest
 import com.mdblisthub.tv.core.ui.theme.HubColors
@@ -103,6 +111,13 @@ private sealed interface EditableListTarget {
         override val displayName: String get() = feed.name
     }
 }
+
+private data class HomeOptionTarget(
+    val item: MediaItem,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val resumePoint: ResumePoint? = null,
+)
 
 /**
  * How the column scrolls when focus moves between rows.
@@ -171,6 +186,8 @@ fun HomeScreen(
     onOpenTitle: (MediaItem) -> Unit,
     onOpenAddons: () -> Unit,
     onResume: (ResumePoint) -> Unit,
+    onPlay: (MediaItem, Int?, Int?) -> Unit,
+    onChooseSource: (MediaItem, Int?, Int?) -> Unit,
     initialEditMode: Boolean = false,
 ) {
     val viewModel = hubViewModel { HomeViewModel(graph) }
@@ -326,11 +343,76 @@ fun HomeScreen(
             }
         }
     }
+    val playTarget: (HomeOptionTarget) -> Unit = { target ->
+        if (target.item.tmdbId > 0) {
+            onPlay(target.item, target.season, target.episode)
+        } else {
+            target.item.imdbId?.let { imdbId ->
+                scope.launch {
+                    graph.media.resolveImdb(target.item.type, imdbId).onSuccess { tmdbId ->
+                        onPlay(target.item.copy(tmdbId = tmdbId), target.season, target.episode)
+                    }
+                }
+            }
+        }
+    }
+    val chooseSourceTarget: (HomeOptionTarget) -> Unit = { target ->
+        if (target.resumePoint != null) {
+            resumePlayback(target.resumePoint)
+        } else if (target.item.tmdbId > 0) {
+            onChooseSource(target.item, target.season, target.episode)
+        } else {
+            target.item.imdbId?.let { imdbId ->
+                scope.launch {
+                    graph.media.resolveImdb(target.item.type, imdbId).onSuccess { tmdbId ->
+                        onChooseSource(target.item.copy(tmdbId = tmdbId), target.season, target.episode)
+                    }
+                }
+            }
+        }
+    }
 
     var renameTarget by remember { mutableStateOf<EditableListTarget?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<EditableListTarget?>(null) }
     val resumeRemoveLabel = stringResource(R.string.home_delete)
+    val playLabel = stringResource(R.string.media_options_play)
+    val sourceLabel = stringResource(R.string.media_options_select_source)
+    val infoLabel = stringResource(R.string.media_options_info)
+    val watchedLabel = stringResource(R.string.media_options_mark_watched)
+    val unwatchedLabel = stringResource(R.string.media_options_mark_unwatched)
+    val showOptions: (HomeOptionTarget, PosterCardAnchor) -> Unit = { target, anchor ->
+        val isEpisode = target.item.type == MediaType.SHOW &&
+            target.season != null && target.episode != null
+        val watched = if (isEpisode) {
+            watchedEpisodes.contains("${target.item.tmdbId}:${target.season}:${target.episode}")
+        } else {
+            watchedIds.contains(target.item.tmdbId)
+        }
+        PosterActionOverlayHost.show(
+            PosterOverlayRequest(
+                anchor = anchor,
+                title = target.item.title,
+                subtitle = if (isEpisode) "S${target.season} · E${target.episode}" else null,
+                actions = listOf(
+                    PosterOverlayAction(playLabel, Icons.Default.PlayArrow) { playTarget(target) },
+                    PosterOverlayAction(sourceLabel, Icons.Default.Tune) { chooseSourceTarget(target) },
+                    PosterOverlayAction(infoLabel, Icons.Default.Info) { openCatalogItem(target.item) },
+                    PosterOverlayAction(
+                        if (watched) unwatchedLabel else watchedLabel,
+                        if (watched) Icons.Default.Undo else Icons.Default.CheckCircle,
+                    ) {
+                        viewModel.setWatched(
+                            target.item,
+                            target.season,
+                            target.episode,
+                            !watched,
+                        )
+                    },
+                ),
+            ),
+        )
+    }
     val emptyStateFocusRequester = remember { FocusRequester() }
     val normalFirstRowOffsetPx = with(LocalDensity.current) { 32.dp.toPx() }
     val spotlightHeroHeightPx = with(LocalDensity.current) { nuvioSpotlightHeroHeight().toPx() }
@@ -657,22 +739,49 @@ fun HomeScreen(
                             // can say correctly which point this was.
                             onItemFocused = viewModel::onFocused,
                             key = { index, item -> resumePoints.getOrNull(index)?.key ?: item.key },
-                            onItemClickIndexed = { index, _ ->
-                                resumeCards.getOrNull(index)?.let(openCatalogItem)
+                            onItemClickIndexedWithAnchor = { index, _, anchor ->
+                                val point = resumePoints.getOrNull(index)
+                                val card = resumeCards.getOrNull(index)
+                                if (point != null && card != null && point.type == MediaType.SHOW &&
+                                    point.season != null && point.episode != null
+                                ) {
+                                    showOptions(
+                                        HomeOptionTarget(card, point.season, point.episode, point),
+                                        anchor,
+                                    )
+                                } else {
+                                    card?.let(openCatalogItem)
+                                }
                             },
                             onItemLongClickIndexed = { index, _, anchor ->
                                 resumePoints.getOrNull(index)?.let { point ->
+                                    val card = resumeCards.getOrNull(index) ?: return@let
+                                    val target = HomeOptionTarget(card, point.season, point.episode, point)
+                                    val watched = point.type == MediaType.SHOW &&
+                                        point.season != null && point.episode != null &&
+                                        watchedEpisodes.contains("${card.tmdbId}:${point.season}:${point.episode}") ||
+                                        watchedIds.contains(card.tmdbId)
                                     PosterActionOverlayHost.show(
                                         PosterOverlayRequest(
                                             anchor = anchor,
                                             title = point.title,
+                                            subtitle = if (point.season != null && point.episode != null) {
+                                                "S${point.season} · E${point.episode}"
+                                            } else null,
                                             actions = listOf(
+                                                PosterOverlayAction(playLabel, Icons.Default.PlayArrow) { playTarget(target) },
+                                                PosterOverlayAction(sourceLabel, Icons.Default.Tune) { chooseSourceTarget(target) },
+                                                PosterOverlayAction(infoLabel, Icons.Default.Info) { openCatalogItem(card) },
                                                 PosterOverlayAction(
                                                     label = resumeRemoveLabel,
                                                     icon = Icons.Default.Delete,
                                                     isDestructive = true,
                                                     onSelected = { viewModel.removeResumePoint(point) },
                                                 ),
+                                                PosterOverlayAction(
+                                                    if (watched) unwatchedLabel else watchedLabel,
+                                                    if (watched) Icons.Default.Undo else Icons.Default.CheckCircle,
+                                                ) { viewModel.setWatched(card, point.season, point.episode, !watched) },
                                             ),
                                         ),
                                     )
@@ -728,6 +837,9 @@ fun HomeScreen(
                                 },
                                 onEnsure = { viewModel.ensureItems(list.id) },
                                 onItemClick = onOpenTitle,
+                                onItemLongClick = { item, anchor ->
+                                    showOptions(HomeOptionTarget(item), anchor)
+                                },
                                 onItemFocused = viewModel::onFocused,
                                 onReachedEnd = { viewModel.loadMore(list.id) },
                                 isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
@@ -760,6 +872,9 @@ fun HomeScreen(
                                 },
                                 onEnsure = { viewModel.ensureCatalog(catalog) },
                                 onItemClick = openCatalogItem,
+                                onItemLongClick = { item, anchor ->
+                                    showOptions(HomeOptionTarget(item), anchor)
+                                },
                                 onItemFocused = viewModel::onFocused,
                                 isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
                                 requestInitialFocus = requestInitialFocus,
@@ -792,8 +907,25 @@ fun HomeScreen(
                                     val feedItem = feed.items.getOrNull(itemIndex)
                                     "${item.key}:${feedItem?.season ?: 0}:${feedItem?.episode ?: 0}"
                                 },
-                                onItemClickIndexed = { _, item ->
-                                    openCatalogItem(item)
+                                onItemClickIndexedWithAnchor = { itemIndex, item, anchor ->
+                                    val feedItem = feed.items.getOrNull(itemIndex)
+                                    if (feed.key == MdblistHomeFeedKeys.UP_NEXT &&
+                                        feedItem?.season != null && feedItem.episode != null
+                                    ) {
+                                        showOptions(
+                                            HomeOptionTarget(item, feedItem.season, feedItem.episode),
+                                            anchor,
+                                        )
+                                    } else {
+                                        openCatalogItem(item)
+                                    }
+                                },
+                                onItemLongClickIndexed = { itemIndex, item, anchor ->
+                                    val feedItem = feed.items.getOrNull(itemIndex)
+                                    showOptions(
+                                        HomeOptionTarget(item, feedItem?.season, feedItem?.episode),
+                                        anchor,
+                                    )
                                 },
                                 onItemFocused = viewModel::onFocused,
                                 isWatched = { itemIndex, item ->
@@ -823,6 +955,9 @@ fun HomeScreen(
                             title = stringResource(R.string.home_because_you_watched, row.seedTitle),
                             items = row.items,
                             onItemClick = onOpenTitle,
+                            onItemLongClickIndexed = { _, item, anchor ->
+                                showOptions(HomeOptionTarget(item), anchor)
+                            },
                             onItemFocused = viewModel::onFocused,
                             requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
                             requestInitialFocus = isSpotlightTheme &&
@@ -868,6 +1003,7 @@ private fun AddonCatalogRow(
     onDelete: () -> Unit,
     onEnsure: () -> Unit,
     onItemClick: (MediaItem) -> Unit,
+    onItemLongClick: (MediaItem, PosterCardAnchor) -> Unit,
     onItemFocused: (MediaItem) -> Unit,
     isWatched: ((Int, MediaItem) -> Boolean)? = null,
     requestInitialFocus: Boolean = false,
@@ -888,6 +1024,7 @@ private fun AddonCatalogRow(
         onRename = onRename,
         onDelete = onDelete,
         onItemClick = onItemClick,
+        onItemLongClickIndexed = { _, item, anchor -> onItemLongClick(item, anchor) },
         onItemFocused = onItemFocused,
         isWatched = isWatched,
         requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
@@ -933,6 +1070,7 @@ private fun ListRow(
     onDelete: () -> Unit = {},
     onEnsure: () -> Unit,
     onItemClick: (MediaItem) -> Unit,
+    onItemLongClick: (MediaItem, PosterCardAnchor) -> Unit,
     onItemFocused: (MediaItem) -> Unit,
     isWatched: ((Int, MediaItem) -> Boolean)? = null,
     onReachedEnd: () -> Unit,
@@ -956,6 +1094,7 @@ private fun ListRow(
         onRename = onRename,
         onDelete = onDelete,
         onItemClick = onItemClick,
+        onItemLongClickIndexed = { _, item, anchor -> onItemLongClick(item, anchor) },
         onItemFocused = onItemFocused,
         isWatched = isWatched,
         onReachedEnd = onReachedEnd,

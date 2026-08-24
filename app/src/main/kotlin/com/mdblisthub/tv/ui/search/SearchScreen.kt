@@ -23,6 +23,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +51,9 @@ import com.mdblisthub.tv.R
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.ui.component.PosterCard
+import com.mdblisthub.tv.core.ui.component.PosterActionOverlayHost
+import com.mdblisthub.tv.core.ui.component.PosterOverlayAction
+import com.mdblisthub.tv.core.ui.component.PosterOverlayRequest
 import com.mdblisthub.tv.core.ui.component.HubGlassCard
 import com.mdblisthub.tv.core.ui.component.HubScreenHeading
 import com.mdblisthub.tv.core.ui.component.HubSkeletonBlock
@@ -57,6 +65,8 @@ import com.mdblisthub.tv.core.ui.theme.HubTokens
 fun SearchScreen(
     graph: DataGraph,
     onOpenTitle: (MediaItem) -> Unit,
+    onPlay: (MediaItem) -> Unit,
+    onChooseSource: (MediaItem) -> Unit,
 ) {
     val viewModel = viewModel<SearchViewModel>(factory = object : androidx.lifecycle.ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -66,6 +76,12 @@ fun SearchScreen(
     val query by viewModel.query.collectAsStateWithLifecycle()
     val results by viewModel.results.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val watchedIds by viewModel.watchedIds.collectAsStateWithLifecycle()
+    val playLabel = stringResource(R.string.media_options_play)
+    val sourceLabel = stringResource(R.string.media_options_select_source)
+    val infoLabel = stringResource(R.string.media_options_info)
+    val watchedLabel = stringResource(R.string.media_options_mark_watched)
+    val unwatchedLabel = stringResource(R.string.media_options_mark_unwatched)
 
     val focusRequester = remember { FocusRequester() }
 
@@ -133,7 +149,26 @@ fun SearchScreen(
                 items(results, key = { it.key }) { item ->
                     PosterCard(
                         item = item,
-                        onClick = { onOpenTitle(item) }
+                        onClick = { onOpenTitle(item) },
+                        isWatched = item.tmdbId in watchedIds,
+                        onLongClick = { anchor ->
+                            val watched = item.tmdbId in watchedIds
+                            PosterActionOverlayHost.show(
+                                PosterOverlayRequest(
+                                    anchor = anchor,
+                                    title = item.title,
+                                    actions = listOf(
+                                        PosterOverlayAction(playLabel, Icons.Default.PlayArrow) { onPlay(item) },
+                                        PosterOverlayAction(sourceLabel, Icons.Default.Tune) { onChooseSource(item) },
+                                        PosterOverlayAction(infoLabel, Icons.Default.Info) { onOpenTitle(item) },
+                                        PosterOverlayAction(
+                                            if (watched) unwatchedLabel else watchedLabel,
+                                            if (watched) Icons.Default.Undo else Icons.Default.CheckCircle,
+                                        ) { viewModel.setWatched(item, !watched) },
+                                    ),
+                                ),
+                            )
+                        },
                     )
                 }
             }

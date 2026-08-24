@@ -386,7 +386,7 @@
     <string name="settings_page_appearance">Aparência</string>
     <string name="settings_page_appearance_description">Tema, identidade de cores e idioma do aplicativo</string>
     <string name="settings_page_library">Biblioteca</string>
-    <string name="settings_page_library_description">Histórico, provedor e conexão com o Trakt</string>
+    <string name="settings_page_library_description">Histórico, provedor e serviços conectados</string>
     <string name="settings_page_subtitles">Legendas</string>
     <string name="settings_page_subtitles_description">Download automático, idioma e cor</string>
     <string name="settings_page_playback">Reprodução</string>
@@ -403,4 +403,21 @@
     <string name="settings_version_format">Versão %1$s (%2$d)</string>
     <string name="settings_open_source_title">Código aberto</string>
     <string name="settings_open_source_description">O OmniStream é distribuído sob a GPL-3.0 e inclui componentes de código aberto com atribuição.</string>
+    <string name="settings_library_provider_simkl">Watchlist, assistidos e continuar assistindo</string>
+    <string name="settings_library_simkl">Simkl</string>
+    <string name="settings_simkl_not_connected">Nenhuma conta Simkl conectada</string>
+    <string name="settings_simkl_connect">Conectar Simkl</string>
+    <string name="settings_simkl_connected">Conta Simkl conectada</string>
+    <string name="settings_simkl_disconnect">Desconectar</string>
+    <string name="simkl_link_title">Conectar ao Simkl</string>
+    <string name="simkl_link_requesting">Solicitando um código…</string>
+    <string name="simkl_link_instruction">Abra %1$s no celular e informe:</string>
+    <string name="simkl_link_expires">Expira em %1$d:%2$02d</string>
+    <string name="simkl_link_connected">Simkl conectado</string>
+    <string name="simkl_link_failed">Não foi possível conectar ao Simkl.</string>
+    <string name="media_options_play">Reproduzir</string>
+    <string name="media_options_select_source">Selecionar fonte</string>
+    <string name="media_options_info">Informações</string>
+    <string name="media_options_mark_watched">Marcar como assistido</string>
+    <string name="media_options_mark_unwatched">Marcar como não assistido</string>
 </resources>

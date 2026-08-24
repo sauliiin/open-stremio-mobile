@@ -18,7 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
-import androidx.core.app.ActivityCompat
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,6 +39,9 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
 
     private lateinit var appUpdateManager: AppUpdateManager
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Every OmniStream palette is dark. The automatic edge-to-edge style
@@ -51,11 +54,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         hideStatusBar()
         PlaybackCompletionNotifier.createChannel(this)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4108)
-        }
+        requestNotificationPermissionOnce()
 
         val graph = (application as HubApplication).graph
         appUpdateManager = AppUpdateManager(this, GITHUB_REPOSITORY)
@@ -135,8 +134,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) return
+
+        val preferences = getSharedPreferences(NOTIFICATION_PREFERENCES, MODE_PRIVATE)
+        if (preferences.getBoolean(NOTIFICATION_PERMISSION_REQUESTED, false)) return
+        preferences.edit().putBoolean(NOTIFICATION_PERMISSION_REQUESTED, true).apply()
+        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     private companion object {
         const val DEFAULT_LANGUAGE = "en"
         const val GITHUB_REPOSITORY = "sauliiin/open-stremio-mobile"
+        const val NOTIFICATION_PREFERENCES = "playback_notifications"
+        const val NOTIFICATION_PERMISSION_REQUESTED = "permission_requested"
     }
 }

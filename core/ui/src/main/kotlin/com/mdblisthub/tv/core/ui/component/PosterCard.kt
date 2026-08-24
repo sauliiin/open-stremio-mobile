@@ -90,6 +90,8 @@ fun PosterCard(
      * as the start frame of its zoom.
      */
     onLongClick: ((PosterCardAnchor) -> Unit)? = null,
+    /** Optional tap callback that also receives the card geometry used by action overlays. */
+    onClickWithAnchor: ((PosterCardAnchor) -> Unit)? = null,
     isWatched: Boolean = false,
     /**
      * Netflixy/Primefly's touch equivalent of D-pad focus: this app has no
@@ -160,6 +162,13 @@ fun PosterCard(
     // Only tracked for the long-press hand-off below; a card with no
     // `onLongClick` never reads it, so this costs it nothing.
     var cardBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
+    val cardAnchor = {
+        PosterCardAnchor(
+            boundsInRoot = cardBoundsInRoot,
+            cornerRadius = if (HubColors.isCyberpunk) 0.dp else HubTokens.Radius.md,
+            imageUrl = artworkUrl,
+        )
+    }
 
     Column(
         modifier = modifier.width(HubDimens.PosterWidth),
@@ -198,11 +207,7 @@ fun PosterCard(
                     val longClickHandler = onLongClick?.let { handler ->
                         {
                             handler(
-                                PosterCardAnchor(
-                                    boundsInRoot = cardBoundsInRoot,
-                                    cornerRadius = cornerRadius,
-                                    imageUrl = artworkUrl,
-                                ),
+                                cardAnchor(),
                             )
                         }
                     }
@@ -213,7 +218,7 @@ fun PosterCard(
                             onClick = { onFocused(item) },
                             onDoubleClick = {
                                 onFocused(item)
-                                onClick()
+                                onClickWithAnchor?.invoke(cardAnchor()) ?: onClick()
                             },
                             onLongClick = longClickHandler,
                         )
@@ -222,7 +227,7 @@ fun PosterCard(
                             indication = null,
                             onClick = {
                                 onFocused(item)
-                                onClick()
+                                onClickWithAnchor?.invoke(cardAnchor()) ?: onClick()
                             },
                         )
                         else -> base.combinedClickable(
@@ -230,7 +235,7 @@ fun PosterCard(
                             indication = null,
                             onClick = {
                                 onFocused(item)
-                                onClick()
+                                onClickWithAnchor?.invoke(cardAnchor()) ?: onClick()
                             },
                             onLongClick = longClickHandler,
                         )

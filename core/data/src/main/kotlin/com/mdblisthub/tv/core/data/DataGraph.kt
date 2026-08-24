@@ -15,6 +15,7 @@ import com.mdblisthub.tv.core.data.repository.StreamsRepository
 import com.mdblisthub.tv.core.data.repository.StremioAccountRepository
 import com.mdblisthub.tv.core.data.repository.TrailerRepository
 import com.mdblisthub.tv.core.data.repository.TraktAuthRepository
+import com.mdblisthub.tv.core.data.repository.SimklAuthRepository
 import com.mdblisthub.tv.core.data.repository.WikipediaRepository
 import com.mdblisthub.tv.core.data.repository.source.MdblistHomeFeedSource
 import com.mdblisthub.tv.core.data.repository.source.MdblistLibrarySource
@@ -22,15 +23,24 @@ import com.mdblisthub.tv.core.data.repository.source.MdblistPlaybackSource
 import com.mdblisthub.tv.core.data.repository.source.TraktHomeFeedSource
 import com.mdblisthub.tv.core.data.repository.source.TraktLibrarySource
 import com.mdblisthub.tv.core.data.repository.source.TraktPlaybackSource
+import com.mdblisthub.tv.core.data.repository.source.SimklHomeFeedSource
+import com.mdblisthub.tv.core.data.repository.source.SimklLibrarySource
+import com.mdblisthub.tv.core.data.repository.source.SimklPlaybackSource
 import com.mdblisthub.tv.core.model.LibraryProvider
 import com.mdblisthub.tv.core.data.work.ImageMemoryTrimmer
 import com.mdblisthub.tv.core.data.work.ImageWarmer
 import com.mdblisthub.tv.core.data.work.MetadataScheduler
 import com.mdblisthub.tv.core.database.HubDatabase
+import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.network.NetworkModule
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * The object graph, built once by the Application.
@@ -54,8 +64,10 @@ class DataGraph(context: Context) {
     val uiPreferences = UiPreferencesStore(appContext)
     val stremioAccountStore = StremioAccountStore(appContext)
     val traktTokenStore = TraktTokenStore(appContext)
+    val simklTokenStore = SimklTokenStore(appContext)
 
     val traktAuth = TraktAuthRepository(network.traktAuth, network.trakt, traktTokenStore)
+    val simklAuth = SimklAuthRepository(network.simkl, simklTokenStore)
 
     init {
         // The HTTP layer reads the Trakt credential through this — see
@@ -64,6 +76,7 @@ class DataGraph(context: Context) {
         // of the network module, not underneath it. Same late binding as
         // [imageWarmer] below.
         network.traktTokens = traktAuth
+        network.simklToken = { kotlinx.coroutines.runBlocking { simklTokenStore.accessToken() } }
     }
 
     val auth = AuthRepository(
@@ -94,6 +107,7 @@ class DataGraph(context: Context) {
     val homeFeeds = HomeFeedsRepository(
         mdblist = MdblistHomeFeedSource(network.mdblist, session),
         trakt = TraktHomeFeedSource(network.trakt, traktTokenStore),
+        simkl = SimklHomeFeedSource(network.simkl, simklTokenStore),
         preferences = uiPreferences,
         session = session,
         media = media,
@@ -112,12 +126,14 @@ class DataGraph(context: Context) {
     val library = LibraryRepository(
         mdblist = MdblistLibrarySource(network.mdblist, session),
         trakt = TraktLibrarySource(network.trakt, traktTokenStore),
+        simkl = SimklLibrarySource(network.simkl, simklTokenStore),
         preferences = uiPreferences,
         database = database,
     )
     val playback = PlaybackRepository(
         mdblist = MdblistPlaybackSource(network.mdblist, session),
         trakt = TraktPlaybackSource(network.trakt, traktTokenStore),
+        simkl = SimklPlaybackSource(network.simkl, simklTokenStore),
         preferences = uiPreferences,
         database = database,
         media = media,
@@ -150,6 +166,79 @@ class DataGraph(context: Context) {
      * this graph. See [ImageMemoryTrimmer] for why the player wants it.
      */
     var imageMemoryTrimmer: ImageMemoryTrimmer = ImageMemoryTrimmer.NoOp
+
+    private var startupArtworkWarmup: Job? = null
+
+    /**
+     * Uses the intro's screen time to put the first Home artwork into Coil.
+     *
+     * The Home is already composed behind the intro, so this does not delay
+     * navigation or data loading. It only gives the images most likely to be
+     * on the first screen an explicit head start. A second bounded pass picks
+     * up account feeds that may have arrived while the intro was playing;
+     * Coil de-duplicates anything the first pass or the real UI already
+     * requested.
+     */
+    fun warmHomeArtworkDuringIntro() {
+        if (startupArtworkWarmup?.isActive == true) return
+        startupArtworkWarmup = scope.launch {
+            repeat(STARTUP_ARTWORK_PASSES) { pass ->
+                warmCachedHomeArtwork()
+                if (pass < STARTUP_ARTWORK_PASSES - 1) delay(STARTUP_ARTWORK_RETRY_MS)
+            }
+        }
+    }
+
+    private suspend fun warmCachedHomeArtwork() {
+        val visibleLists = lists.listsOnce()
+            .asSequence()
+            .filterNot { it.hidden }
+            .sortedBy { it.position }
+            .take(STARTUP_LIST_LIMIT)
+            .toList()
+
+        val listItems = coroutineScope {
+            visibleLists.flatMap { list ->
+                lists.observeItems(list.id).first().take(STARTUP_CARDS_PER_ROW)
+            }
+        }
+        val feedItems = homeFeeds.observeFeeds().first()
+            .asSequence()
+            .filterNot { it.hidden }
+            .sortedBy { it.position ?: Int.MAX_VALUE }
+            .take(STARTUP_FEED_LIMIT)
+            .flatMap { feed -> feed.items.take(STARTUP_CARDS_PER_ROW).asSequence() }
+            .map { it.media }
+            .toList()
+        val resumeItems = playback.resumePoints.first()
+            .take(STARTUP_CARDS_PER_ROW)
+            .map { point ->
+                MediaItem(
+                    tmdbId = point.tmdbId ?: 0,
+                    type = point.type,
+                    title = point.title,
+                    imdbId = point.imdbId,
+                    posterUrl = point.posterUrl,
+                    backdropUrl = point.backdropUrl,
+                    score = point.score,
+                )
+            }
+
+        val cards = (resumeItems + feedItems + listItems)
+            .distinctBy { it.key }
+            .take(STARTUP_CARD_LIMIT)
+        val firstCard = cards.firstOrNull()
+        val urls = buildList {
+            // The hero is the largest image on screen, so it gets first place
+            // in the loader queue before the shelf thumbnails.
+            firstCard?.backdropUrl?.let(::add)
+            firstCard?.landscapeUrl?.let(::add)
+            cards.mapNotNullTo(this) { it.posterUrl }
+            cards.mapNotNullTo(this) { it.landscapeUrl ?: it.backdropUrl }
+        }.distinct().take(STARTUP_URL_LIMIT)
+
+        if (urls.isNotEmpty()) imageWarmer.warm(urls)
+    }
 
     /**
      * Moves the library to another provider, and clears what the old one left.
@@ -184,5 +273,20 @@ class DataGraph(context: Context) {
     suspend fun unlinkTrakt() {
         switchLibraryProvider(LibraryProvider.MDBLIST)
         traktAuth.unlink()
+    }
+
+    suspend fun unlinkSimkl() {
+        switchLibraryProvider(LibraryProvider.MDBLIST)
+        simklAuth.unlink()
+    }
+
+    private companion object {
+        const val STARTUP_ARTWORK_PASSES = 2
+        const val STARTUP_ARTWORK_RETRY_MS = 1_500L
+        const val STARTUP_LIST_LIMIT = 3
+        const val STARTUP_FEED_LIMIT = 2
+        const val STARTUP_CARDS_PER_ROW = 8
+        const val STARTUP_CARD_LIMIT = 24
+        const val STARTUP_URL_LIMIT = 40
     }
 }

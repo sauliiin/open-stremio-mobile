@@ -51,7 +51,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -246,40 +245,10 @@ private fun PosterActionOverlayBody(
 
             Spacer(Modifier.height(HubTokens.Space.lg))
 
-            Column(
-                modifier = Modifier
-                    .width(columnWidth)
-                    .graphicsLayer {
-                        val progress = menu.value.coerceIn(0f, 1f)
-                        alpha = progress
-                        translationY = (1f - progress) * HubTokens.Space.sm.toPx()
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = request.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = HubColors.Text,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = HubTokens.Space.md),
-                )
-                if (!request.subtitle.isNullOrBlank()) {
-                    Spacer(Modifier.height(HubTokens.Space.xxs))
-                    Text(
-                        text = request.subtitle,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = HubColors.TextDim,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(HubTokens.Space.md))
+            // The poster already identifies the selection. Keeping the title
+            // here duplicated it and pushed the actions below the fold on a
+            // phone, so the compact menu goes straight from preview to actions.
+            Spacer(Modifier.height(HubTokens.Space.sm))
 
             Column(
                 modifier = Modifier
