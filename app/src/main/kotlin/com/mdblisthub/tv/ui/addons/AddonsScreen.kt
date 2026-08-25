@@ -1072,9 +1072,9 @@ private fun HubTextField(
             value = value,
             onValueChange = onValueChange,
             modifier = if (focusRequester != null) {
-                Modifier.focusRequester(focusRequester)
+                Modifier.fillMaxWidth().focusRequester(focusRequester)
             } else {
-                Modifier
+                Modifier.fillMaxWidth()
             },
             singleLine = true,
             textStyle = MaterialTheme.typography.titleMedium.copy(color = HubColors.Text),
