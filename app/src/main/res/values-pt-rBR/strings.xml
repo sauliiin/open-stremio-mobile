@@ -17,6 +17,8 @@
     <string name="settings_amoled_mode">Modo AMOLED</string>
     <string name="settings_amoled_mode_description">Use preto puro nos fundos do aplicativo</string>
     <string name="settings_autotrailer">Trailers automáticos</string>
+    <string name="settings_intro_enabled">Vídeo de abertura</string>
+    <string name="settings_intro_enabled_description">Reproduz um vídeo curto ao abrir o app.</string>
     <string name="settings_autotrailer_pip_description">Reproduza prévias com áudio em uma pequena janela</string>
     <string name="settings_subtitle_text_opacity">Opacidade do texto</string>
     <string name="settings_subtitle_background">Fundo preto</string>
@@ -291,8 +293,11 @@
     <string name="trakt_link_retry">Tentar de novo</string>
     <string name="trakt_link_error_expired">O código expirou antes de ser aprovado. Peça um novo.</string>
     <string name="trakt_link_error_denied">O acesso foi recusado no Trakt.</string>
-    <string name="trakt_link_error_unavailable">Não foi possível falar com o Trakt. Tente de novo.</string>
+    <string name="trakt_link_error_unavailable">Não foi possível falar com o Trakt.</string>
     <string name="trakt_link_error_credentials">Este build não traz credenciais do Trakt.</string>
+    <string name="trakt_link_success">Autenticação concluída</string>
+    <string name="trakt_link_failed_title">Não foi possível concluir a autenticação</string>
+    <string name="trakt_link_try_again">Tente novamente.</string>
     <string name="trakt_link_vip_limit_warning">Contas Trakt gratuitas conectam só um app de terceiros por vez.</string>
 
     <!-- Atualização automática via GitHub Releases -->

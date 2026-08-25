@@ -93,6 +93,25 @@ class UiPreferencesStore(context: Context) {
         store.edit { it[KEY_AUTOTRAILER] = enabled }
     }
 
+    /**
+     * Off by default, unlike the TV build's own intro: this is a feature
+     * being introduced to an app people already have installed, not
+     * something a fresh setup opts into. Turning it on is a choice a viewer
+     * makes in Settings, not a video sprung on the next cold start.
+     *
+     * Mirrored to [startupMirror] for the same reason as [amoledMode]: the
+     * very first frame has to know whether to show the video, and resolving
+     * that from DataStore would mean either blocking on `runBlocking` or
+     * letting Home flash on screen for a frame before the intro appears.
+     */
+    val introEnabled: Flow<Boolean> = store.data.map { it[KEY_INTRO_ENABLED] ?: false }
+    fun startupIntroEnabled(): Boolean = startupMirror.getBoolean(KEY_INTRO_ENABLED.name, false)
+
+    suspend fun saveIntroEnabled(enabled: Boolean) {
+        startupMirror.edit().putBoolean(KEY_INTRO_ENABLED.name, enabled).apply()
+        store.edit { it[KEY_INTRO_ENABLED] = enabled }
+    }
+
     val amoledMode: Flow<Boolean> = store.data.map { it[KEY_AMOLED_MODE] ?: false }
     fun startupAmoledMode(): Boolean = startupMirror.getBoolean(KEY_AMOLED_MODE.name, false)
     suspend fun saveAmoledMode(enabled: Boolean) {
@@ -205,6 +224,7 @@ class UiPreferencesStore(context: Context) {
         val KEY_SETUP_COMPLETED = booleanPreferencesKey("setup_completed")
         val KEY_AUTOTRAILER = booleanPreferencesKey("autotrailer")
         val KEY_AMOLED_MODE = booleanPreferencesKey("amoled_mode")
+        val KEY_INTRO_ENABLED = booleanPreferencesKey("intro_enabled")
         val KEY_LIBRARY_PROVIDER = stringPreferencesKey("library_provider")
         val KEY_LANGUAGE = stringPreferencesKey("language")
         val KEY_SUBTITLE_AUTO_DOWNLOAD = booleanPreferencesKey("subtitle_auto_download")

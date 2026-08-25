@@ -183,19 +183,58 @@ fun TraktLinkOverlay(
                         )
                     }
 
-                    is TraktLinkState.Linked -> Text(
-                        stringResource(R.string.trakt_link_linked, state.account.handle),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = HubColors.Text,
-                        textAlign = TextAlign.Center,
-                    )
+                    // Said in two parts, because they answer two different
+                    // questions: whether the device flow actually completed,
+                    // and which account it completed as. The second alone is
+                    // what used to be here, and an account name on its own
+                    // does not read as "this worked" — especially now that
+                    // this state stays on screen instead of vanishing after a
+                    // beat, so it has to hold up on its own.
+                    is TraktLinkState.Linked -> Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.trakt_link_success),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = HubColors.Fresh,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            stringResource(R.string.trakt_link_linked, state.account.handle),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = HubColors.Text,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
 
-                    is TraktLinkState.Failed -> Text(
-                        stringResource(state.reason.messageRes()),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = HubColors.TextDim,
-                        textAlign = TextAlign.Center,
-                    )
+                    // Same two parts, inverted: what went wrong, and what to
+                    // do about it.
+                    is TraktLinkState.Failed -> Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.trakt_link_failed_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = HubColors.Rotten,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            stringResource(state.reason.messageRes()),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = HubColors.TextDim,
+                            textAlign = TextAlign.Center,
+                        )
+                        if (state.reason != TraktLinkFailure.MISSING_CREDENTIALS) {
+                            Text(
+                                stringResource(R.string.trakt_link_try_again),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = HubColors.Text,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
                 }
 
                 // A failure that a new code could fix gets a retry; one that

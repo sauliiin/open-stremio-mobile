@@ -17,6 +17,8 @@
     <string name="settings_amoled_mode">AMOLED mode</string>
     <string name="settings_amoled_mode_description">Use pure black for app backgrounds</string>
     <string name="settings_autotrailer">Automatic trailers</string>
+    <string name="settings_intro_enabled">Opening intro video</string>
+    <string name="settings_intro_enabled_description">Play a short video when the app starts.</string>
     <string name="settings_autotrailer_pip_description">Play focused-title previews with audio in a small window</string>
     <string name="settings_subtitle_text_opacity">Text opacity</string>
     <string name="settings_subtitle_background">Black background</string>
@@ -291,8 +293,11 @@
     <string name="trakt_link_retry">Try again</string>
     <string name="trakt_link_error_expired">The code expired before it was approved. Ask for a new one.</string>
     <string name="trakt_link_error_denied">Access was denied on Trakt.</string>
-    <string name="trakt_link_error_unavailable">Could not reach Trakt. Try again.</string>
+    <string name="trakt_link_error_unavailable">Could not reach Trakt.</string>
     <string name="trakt_link_error_credentials">This build ships no Trakt credentials.</string>
+    <string name="trakt_link_success">Authentication complete</string>
+    <string name="trakt_link_failed_title">Could not complete authentication</string>
+    <string name="trakt_link_try_again">Please try again.</string>
     <string name="trakt_link_vip_limit_warning">Free Trakt accounts connect only one third-party app at a time.</string>
 
     <!-- Automatic update through GitHub Releases -->

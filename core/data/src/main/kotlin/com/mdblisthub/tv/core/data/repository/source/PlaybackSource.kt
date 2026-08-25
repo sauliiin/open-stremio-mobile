@@ -207,7 +207,15 @@ class TraktPlaybackSource(
         }
 
         val response = api.scrobble(action, body)
-        check(response.isSuccessful) { "scrobble/$action respondeu ${response.code()}" }
+        // Trakt answers 409 when the same item was scrobbled moments ago —
+        // documented behaviour, not a failure: the response carries the
+        // `watched_at`/`expires_at` of the existing scrobble. Treating it as
+        // an error was what made a title that *did* get marked watched look
+        // like the app had silently failed to record it.
+        val alreadyScrobbled = response.code() == 409
+        check(response.isSuccessful || alreadyScrobbled) {
+            "scrobble/$action respondeu ${response.code()}"
+        }
     }
 
     private companion object {

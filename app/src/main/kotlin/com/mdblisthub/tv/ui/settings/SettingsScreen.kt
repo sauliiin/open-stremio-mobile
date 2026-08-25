@@ -136,6 +136,7 @@ data class SettingsUiState(
     val subtitleBackgroundOpacity: Int = 40,
     val amoledMode: Boolean = false,
     val autotrailer: Boolean = false,
+    val introEnabled: Boolean = false,
     val audioLanguage: String = "en",
     val libraryProvider: LibraryProvider = LibraryProvider.MDBLIST,
     val dimUnwatchedEpisodes: Boolean = false,
@@ -218,6 +219,9 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
                 .combine(graph.uiPreferences.autotrailer) { partial, value ->
                     partial.copy(autotrailer = value)
                 }
+                .combine(graph.uiPreferences.introEnabled) { partial, value ->
+                    partial.copy(introEnabled = value)
+                }
                 .collect { _state.value = it }
         }
     }
@@ -261,8 +265,14 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
                             // through a device flow for would be asking twice.
                             graph.switchLibraryProvider(LibraryProvider.TRAKT)
                             refreshLibraryRows()
-                            delay(LINKED_VISIBLE_MS)
-                            _traktLink.value = null
+                            // Deliberately left on screen rather than closed
+                            // after a beat. This is the only moment the flow
+                            // ever confirms it worked, and a device link is
+                            // long enough — open a browser, type a code — that
+                            // the viewer is often not looking at the phone
+                            // when it lands. A confirmation nobody is looking
+                            // at is the same as no confirmation, so it waits
+                            // to be dismissed instead.
                         }
                     }
                 },
@@ -361,6 +371,10 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
 
     fun toggleAutotrailer() = viewModelScope.launch {
         graph.uiPreferences.saveAutotrailer(!_state.value.autotrailer)
+    }
+
+    fun toggleIntroEnabled() = viewModelScope.launch {
+        graph.uiPreferences.saveIntroEnabled(!_state.value.introEnabled)
     }
 
     fun signOut(onDone: () -> Unit) {
@@ -805,6 +819,15 @@ private fun SettingsPagePane(
                                 HubToggle(state.autotrailer, { viewModel.toggleAutotrailer() })
                             },
                             onClick = viewModel::toggleAutotrailer,
+                        )
+                        SettingsDivider()
+                        HubSettingRow(
+                            title = stringResource(R.string.settings_intro_enabled),
+                            description = stringResource(R.string.settings_intro_enabled_description),
+                            trailing = {
+                                HubToggle(state.introEnabled, { viewModel.toggleIntroEnabled() })
+                            },
+                            onClick = viewModel::toggleIntroEnabled,
                         )
                     }
                 }
