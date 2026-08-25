@@ -20,8 +20,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -90,7 +90,7 @@ fun HubButton(
             .border(
                 width = 1.dp,
                 color = when {
-                    !enabled -> Color.Transparent
+                    !enabled -> HubColors.Border.copy(alpha = 0.45f)
                     highlighted -> HubColors.AccentSoft.copy(alpha = 0.72f)
                     else -> HubColors.Border
                 },
@@ -113,6 +113,7 @@ fun HubButton(
                 highlighted -> HubColors.Text
                 else -> HubColors.TextDim
             },
+            textAlign = TextAlign.Center,
             maxLines = 2,
         )
     }

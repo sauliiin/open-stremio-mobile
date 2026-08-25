@@ -147,7 +147,7 @@ fun LoginScreen(
                     HubButton(
                         text = stringResource(R.string.login_google_button),
                         primary = true,
-                        modifier = Modifier.focusRequester(focusRequester),
+                        modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                         onClick = {
                             viewModel.beginGoogleSignIn()
                             scope.launch {
@@ -214,6 +214,7 @@ fun LoginScreen(
                     // account on the box to offer it one.
                     HubButton(
                         text = stringResource(R.string.login_mdblist_only_button),
+                        modifier = Modifier.fillMaxWidth(),
                         onClick = { mdblistOnlyMode = true },
                     )
                 }
@@ -263,10 +264,12 @@ fun LoginScreen(
                         text = stringResource(R.string.login_mdblist_only_submit),
                         primary = true,
                         enabled = state.key.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
                         onClick = viewModel::signInWithMdblistOnly,
                     )
                     HubButton(
                         text = stringResource(R.string.login_mdblist_only_back),
+                        modifier = Modifier.fillMaxWidth(),
                         onClick = { mdblistOnlyMode = false },
                     )
                 }
@@ -331,34 +334,33 @@ fun LoginScreen(
                             text = stringResource(R.string.login_link_mdblist),
                             primary = true,
                             enabled = state.key.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
                             onClick = viewModel::linkMdblist,
                         )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            HubButton(
-                                text = stringResource(R.string.login_continue_without),
-                                onClick = viewModel::continueWithoutMdblist,
-                            )
-                            HubButton(
-                                text = stringResource(R.string.login_create_account),
-                                onClick = {
-                                    try {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, "https://mdblist.com/".toUri())
-                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                        )
-                                    } catch (_: ActivityNotFoundException) {
-                                        viewModel.reportGoogleError(
-                                            resources.getString(R.string.login_error_no_browser),
-                                        )
-                                    }
-                                },
-                            )
-                        }
+                        HubButton(
+                            text = stringResource(R.string.login_continue_without),
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = viewModel::continueWithoutMdblist,
+                        )
+                        HubButton(
+                            text = stringResource(R.string.login_create_account),
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                try {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, "https://mdblist.com/".toUri())
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                } catch (_: ActivityNotFoundException) {
+                                    viewModel.reportGoogleError(
+                                        resources.getString(R.string.login_error_no_browser),
+                                    )
+                                }
+                            },
+                        )
                         HubButton(
                             text = stringResource(R.string.login_change_google_account),
+                            modifier = Modifier.fillMaxWidth(),
                             onClick = viewModel::changeGoogleAccount,
                         )
                     }
