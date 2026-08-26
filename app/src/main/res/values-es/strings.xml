@@ -55,6 +55,7 @@
     <string name="lang_pt">Portugués</string>
     <string name="lang_en">Inglés</string>
     <string name="lang_es">Español</string>
+    <string name="lang_fr">Francés</string>
     <string name="detail_watch">Ver</string>
     <string name="detail_watch_episode">Ver T%1$dE%2$d</string>
     <string name="detail_select_source">Seleccionar fuente</string>
@@ -259,6 +260,10 @@
     <string name="login_error_no_detail">sin detalle</string>
     <string name="login_error_no_activity">No se pudo abrir la ventana de inicio de sesión de Google en este dispositivo.</string>
     <string name="login_key_placeholder">Clave de API de MDBList</string>
+    <string name="settings_mdblist_key_title">Clave MDBList</string>
+    <string name="settings_mdblist_key_description">Las notas, los tráileres, tus listas y la watchlist salen de esta clave. Pega una nueva para cambiar de cuenta — se comprueba antes de guardar nada.</string>
+    <string name="settings_mdblist_key_change">Conectado — toca para cambiar la clave</string>
+    <string name="settings_mdblist_key_add">No conectado — toca para añadir una clave</string>
     <string name="login_link_mdblist">Vincular MDBList</string>
     <string name="login_continue_without">Continuar sin MDBList</string>
     <string name="login_create_account">Crear una cuenta gratis</string>
@@ -338,6 +343,7 @@
     <string name="error_addon_install_timed_out">El addon tardó demasiado en responder. Algunos tardan casi un minuto la primera vez, mientras validan la clave de debrid — inténtalo de nuevo, el segundo intento suele ser instantáneo.</string>
     <string name="error_addon_manifest_unreadable">No se pudo leer el manifest. Revisa la URL — muchos addons generan una dirección propia por usuario en su página de configuración; es esa la que debes pegar aquí, no la dirección del sitio.</string>
     <string name="error_addon_manifest_invalid">La dirección respondió, pero no es un manifest de addon de Stremio.</string>
+    <string name="error_addon_not_configured">El addon respondió, pero aún no está configurado: esta dirección no trae ningún catálogo. Abre su página de configuración, revisa carácter por carácter la dirección generada (es fácil confundir O con 0) y pega esa aquí.</string>
     <string name="error_mdblist_not_linked">Vincula primero tu cuenta de MDBList.</string>
     <string name="error_mdblist_no_lists">Tu cuenta de MDBList no devolvió listas.</string>
     <string name="error_mdblist_no_valid_manifests">MDBList no generó ningún manifest de addon válido.</string>

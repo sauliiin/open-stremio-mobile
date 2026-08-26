@@ -883,8 +883,9 @@ private const val UNWATCHED_ALPHA_FALLBACK = 0.45f
  * three formats this app ships strings for:
  *
  * pt: "sex., 18/12/2026"   en: "Fri, Dec 18, 2026"   es: "vie., 18 dic 2026"
+ * fr: "ven. 18 déc. 2026"
  *
- * Takes the raw "pt"/"en"/"es" code rather than a `Locale` — `Locale.forLanguageTag`
+ * Takes the raw "pt"/"en"/"es"/"fr" code rather than a `Locale` — `Locale.forLanguageTag`
  * on a bare "pt" resolves to European Portuguese, whose CLDR weekday
  * abbreviations don't reliably match Brazil's; building the locale explicitly
  * for each branch pins the exact one this format was written against.
@@ -900,6 +901,7 @@ private fun formatAirDate(airDate: String, language: String): String? {
     return when (language) {
         "pt" -> SimpleDateFormat("EEE, dd/MM/yyyy", Locale.forLanguageTag("pt-BR")).format(parsed)
         "es" -> SimpleDateFormat("EEE, d MMM yyyy", Locale.forLanguageTag("es")).format(parsed)
+        "fr" -> SimpleDateFormat("EEE d MMM yyyy", Locale.FRENCH).format(parsed)
         else -> SimpleDateFormat("EEE, MMM d, yyyy", Locale.US).format(parsed)
     }
 }

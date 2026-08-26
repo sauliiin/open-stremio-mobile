@@ -44,6 +44,8 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
@@ -58,9 +60,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -70,6 +75,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -81,6 +88,8 @@ import com.mdblisthub.tv.BuildConfig
 import com.mdblisthub.tv.R
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.data.repository.SimklLinkState
+import com.mdblisthub.tv.core.model.AppError
+import com.mdblisthub.tv.core.model.AppException
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import com.mdblisthub.tv.core.model.LibraryProvider
 import com.mdblisthub.tv.core.model.TraktAccount
@@ -95,6 +104,7 @@ import com.mdblisthub.tv.core.ui.component.HubSectionLabel
 import com.mdblisthub.tv.core.ui.component.HubSettingRow
 import com.mdblisthub.tv.core.ui.component.HubToggle
 import com.mdblisthub.tv.ui.component.HubButton
+import com.mdblisthub.tv.ui.component.text
 import com.mdblisthub.tv.ui.addons.AddonsScreen
 import com.mdblisthub.tv.ui.hubViewModel
 import kotlinx.coroutines.Job
@@ -102,7 +112,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+/** The four the interface itself is translated to — see `res/values-*`. */
+val INTERFACE_LANGUAGES = listOf(
+    "pt" to "Português (Brasil)",
+    "en" to "English",
+    "es" to "Español",
+    "fr" to "Français",
+)
 
 val ALL_LANGUAGES = listOf(
     "pt" to "Português (Brasil)",
@@ -124,6 +143,13 @@ val ALL_LANGUAGES = listOf(
     "hr" to "Hrvatski",
     "sr" to "Српски",
     "bs" to "Bosanski"
+)
+
+/** What the MDBList key sheet is showing while it is open. */
+data class MdblistKeyState(
+    val value: String = "",
+    val busy: Boolean = false,
+    val error: AppError? = null,
 )
 
 data class SettingsUiState(
@@ -154,6 +180,17 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
     val state = _state.asStateFlow()
 
     /** Non-null only while the device-link overlay is up. */
+    /**
+     * Non-null only while the MDBList key sheet is up.
+     *
+     * Kept beside [state] rather than inside it because the combine below
+     * replaces `_state.value` wholesale on every preference emission, and a
+     * half-typed key living in there would be wiped by an unrelated setting
+     * changing somewhere else.
+     */
+    private val _mdblistKey = MutableStateFlow<MdblistKeyState?>(null)
+    val mdblistKey = _mdblistKey.asStateFlow()
+
     private val _traktLink = MutableStateFlow<TraktLinkState?>(null)
     val traktLink = _traktLink.asStateFlow()
     private val _simklLink = MutableStateFlow<SimklLinkState?>(null)
@@ -335,6 +372,60 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
      * back to Home, and a scope that dies when Settings closes would cancel
      * exactly the work that makes that true.
      */
+    fun beginMdblistKeyEdit() {
+        // Deliberately opens empty rather than pre-filled with the current
+        // key: it is a credential, this is a settings page someone may well
+        // be showing to another person, and nobody retypes a key they are
+        // happy with anyway.
+        _mdblistKey.value = MdblistKeyState()
+    }
+
+    fun onMdblistKeyChange(value: String) {
+        _mdblistKey.update { it?.copy(value = value, error = null) }
+    }
+
+    fun dismissMdblistKeyEdit() {
+        _mdblistKey.value = null
+    }
+
+    /**
+     * Validates the key against MDBList before storing it.
+     *
+     * Which call does the storing depends on how this session was signed in:
+     * a Google session links the key to its Firebase UID, an MDBList-only
+     * session simply replaces the credential it entered with. Both reject a
+     * key the API does not recognise, so a typo never lands as a working
+     * session with an empty home.
+     */
+    fun saveMdblistKey() {
+        val current = _mdblistKey.value ?: return
+        val key = current.value.trim()
+        if (key.isBlank() || current.busy) return
+
+        _mdblistKey.value = current.copy(busy = true, error = null)
+        viewModelScope.launch {
+            val result = if (_state.value.googleEmail != null) {
+                graph.auth.linkMdblist(key).map { }
+            } else {
+                graph.auth.signInWithMdblistOnly(key).map { }
+            }
+            result.fold(
+                onSuccess = {
+                    _mdblistKey.value = null
+                    refreshLibraryRows()
+                },
+                onFailure = { error ->
+                    _mdblistKey.update {
+                        it?.copy(
+                            busy = false,
+                            error = (error as? AppException)?.error ?: AppError.Unexpected,
+                        )
+                    }
+                },
+            )
+        }
+    }
+
     private fun refreshLibraryRows() {
         graph.scope.launch {
             graph.homeFeeds.refresh()
@@ -707,6 +798,16 @@ private fun SettingsPagePane(
     onRequestSignOut: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val mdblistKey by viewModel.mdblistKey.collectAsStateWithLifecycle()
+    mdblistKey?.let { keyState ->
+        MdblistKeyOverlay(
+            state = keyState,
+            onValueChange = viewModel::onMdblistKeyChange,
+            onSave = viewModel::saveMdblistKey,
+            onDismiss = viewModel::dismissMdblistKeyEdit,
+        )
+    }
+
     if (destination == SettingsDestination.ADDONS) {
         AddonsScreen(graph = graph, onBack = onBack)
         return
@@ -776,29 +877,11 @@ private fun SettingsPagePane(
                 }
                 item(key = "appearance-language") {
                     ModernSettingsGroup(stringResource(R.string.settings_section_interface)) {
-                        HubSettingRow(
-                            title = stringResource(R.string.settings_language),
-                            description = ALL_LANGUAGES.firstOrNull { it.first == state.language }?.second ?: state.language,
-                            leading = {
-                                Icon(Icons.Default.Language, contentDescription = null, tint = HubColors.AccentSoft)
-                            },
+                        InterfaceLanguageDropdownRow(
+                            selectedCode = state.language,
+                            languages = INTERFACE_LANGUAGES,
+                            onSelect = viewModel::setLanguage,
                         )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(androidx.compose.foundation.rememberScrollState())
-                                .padding(horizontal = HubTokens.Space.lg, vertical = HubTokens.Space.sm),
-                            horizontalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
-                        ) {
-                            listOf("pt", "en", "es").forEach { code ->
-                                val label = ALL_LANGUAGES.first { it.first == code }.second
-                                HubButton(
-                                    text = label,
-                                    primary = state.language == code,
-                                    onClick = { viewModel.setLanguage(code) },
-                                )
-                            }
-                        }
                     }
                 }
                 item(key = "appearance-options") {
@@ -1017,12 +1100,17 @@ private fun SettingsPagePane(
                     HubSettingRow(
                         title = "MDBList",
                         description = stringResource(
-                            if (state.mdblistLinked) R.string.settings_status_connected else R.string.settings_status_not_connected,
+                            if (state.mdblistLinked) {
+                                R.string.settings_mdblist_key_change
+                            } else {
+                                R.string.settings_mdblist_key_add
+                            },
                         ),
                         leading = {
                             Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = null, tint = HubColors.AccentSoft)
                         },
                         trailing = { SettingsStatusBadge(state.mdblistLinked) },
+                        onClick = viewModel::beginMdblistKeyEdit,
                     )
                     SettingsDivider()
                     HubSettingRow(
@@ -1285,6 +1373,7 @@ private fun LegacySettingsScreen(graph: DataGraph, onBack: () -> Unit) {
                         "pt" to stringResource(R.string.lang_pt),
                         "en" to stringResource(R.string.lang_en),
                         "es" to stringResource(R.string.lang_es),
+                        "fr" to stringResource(R.string.lang_fr),
                     )
                     langs.forEach { (code, name) ->
                         HubButton(
@@ -1508,6 +1597,213 @@ private fun SettingsRow(label: String, content: @Composable () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             content()
+        }
+    }
+}
+
+/**
+ * The interface language, as a row that opens a menu under itself.
+ *
+ * It used to be four buttons in a horizontally scrolling strip, which put the
+ * fourth language off the edge of a phone-width card and gave no clue it was
+ * there. A row that names the current language and drops the rest below it
+ * fits any width and reads the way the other settings rows do.
+ *
+ * Deliberately its own thing rather than the [LanguagePickerOverlay] dialog
+ * that subtitles and audio use: those pick from nineteen languages and want a
+ * full-height list, this picks from the four the interface is translated to.
+ */
+@Composable
+private fun InterfaceLanguageDropdownRow(
+    selectedCode: String,
+    languages: List<Pair<String, String>>,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    // Measured rather than assumed: the row's height is what the menu has to
+    // clear to sit *under* it, and it changes with the text scale the phone
+    // is set to.
+    var rowSize by remember { mutableStateOf(IntSize.Zero) }
+    val selectedName = languages.firstOrNull { it.first == selectedCode }?.second ?: selectedCode
+    val density = LocalDensity.current
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        HubSettingRow(
+            modifier = Modifier.onSizeChanged { rowSize = it },
+            title = stringResource(R.string.settings_language),
+            description = selectedName,
+            leading = {
+                Icon(Icons.Default.Language, contentDescription = null, tint = HubColors.AccentSoft)
+            },
+            trailing = {
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    tint = HubColors.TextDim,
+                    modifier = Modifier.rotate(if (expanded) 180f else 0f),
+                )
+            },
+            onClick = { expanded = !expanded },
+        )
+
+        if (expanded) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(0, rowSize.height),
+                onDismissRequest = { expanded = false },
+                properties = androidx.compose.ui.window.PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = true,
+                ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .width(with(density) { rowSize.width.toDp() })
+                        .clip(RoundedCornerShape(HubTokens.Radius.md))
+                        .background(HubColors.SurfaceStrong)
+                        .border(
+                            1.dp,
+                            HubColors.Border,
+                            RoundedCornerShape(HubTokens.Radius.md),
+                        )
+                        .padding(vertical = HubTokens.Space.xs),
+                ) {
+                    languages.forEach { (code, name) ->
+                        val selected = code == selectedCode
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    expanded = false
+                                    if (!selected) onSelect(code)
+                                }
+                                .padding(
+                                    horizontal = HubTokens.Space.lg,
+                                    vertical = HubTokens.Space.md,
+                                ),
+                            horizontalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (selected) HubColors.Accent else HubColors.Text,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (selected) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = HubColors.Accent,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Where the MDBList key is replaced.
+ *
+ * The key is what the whole account hangs off — lists, ratings, watchlist —
+ * and until now the only way to change it was to sign out and back in, which
+ * also drops the Google session and every local preference along with it.
+ */
+@Composable
+private fun MdblistKeyOverlay(
+    state: MdblistKeyState,
+    onValueChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val shape = RoundedCornerShape(HubTokens.Radius.lg)
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = HubTokens.Opacity.scrim))
+                .padding(HubTokens.Space.lg),
+            contentAlignment = Alignment.Center,
+        ) {
+            HubGlassCard(
+                modifier = Modifier.fillMaxWidth().widthIn(max = 540.dp),
+                strong = true,
+            ) {
+                Column(
+                    modifier = Modifier.padding(HubTokens.Space.xxl),
+                    verticalArrangement = Arrangement.spacedBy(HubTokens.Space.lg),
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_mdblist_key_title),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = HubColors.Text,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_mdblist_key_description),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = HubColors.TextDim,
+                    )
+
+                    BasicTextField(
+                        value = state.value,
+                        onValueChange = onValueChange,
+                        singleLine = true,
+                        enabled = !state.busy,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = HubColors.Text),
+                        cursorBrush = SolidColor(HubColors.Accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(shape)
+                            .background(HubColors.Surface.copy(alpha = HubTokens.Opacity.glass))
+                            .border(1.dp, HubColors.Border, shape)
+                            .padding(horizontal = HubTokens.Space.lg, vertical = 14.dp),
+                        decorationBox = { field ->
+                            if (state.value.isBlank()) {
+                                Text(
+                                    text = stringResource(R.string.login_key_placeholder),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = HubColors.TextFaint,
+                                )
+                            }
+                            field()
+                        },
+                    )
+
+                    state.error?.let { error ->
+                        Text(
+                            text = error.text(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = HubColors.Rotten,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(HubTokens.Space.sm),
+                    ) {
+                        HubButton(
+                            text = stringResource(R.string.home_save),
+                            primary = true,
+                            enabled = !state.busy && state.value.isNotBlank(),
+                            onClick = onSave,
+                            modifier = Modifier.weight(1f),
+                        )
+                        HubButton(
+                            text = stringResource(R.string.home_cancel),
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
         }
     }
 }

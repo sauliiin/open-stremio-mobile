@@ -72,6 +72,7 @@ import com.mdblisthub.tv.core.model.MediaList
 import com.mdblisthub.tv.core.model.MdblistHomeFeed
 import com.mdblisthub.tv.core.model.MdblistHomeFeedKeys
 import com.mdblisthub.tv.core.model.AddonCatalog
+import com.mdblisthub.tv.core.model.AddonCatalogItem
 import com.mdblisthub.tv.core.model.ResumePoint
 import com.mdblisthub.tv.core.ui.component.FanartBackdrop
 import com.mdblisthub.tv.core.ui.component.HubGlassCard
@@ -872,11 +873,19 @@ fun HomeScreen(
                                 },
                                 onEnsure = { viewModel.ensureCatalog(catalog) },
                                 onItemClick = openCatalogItem,
-                                onItemLongClick = { item, anchor ->
-                                    showOptions(HomeOptionTarget(item), anchor)
+                                // A card that names an episode opens the same
+                                // options sheet "A Seguir" does, so playing
+                                // what a channel has scheduled is one tap
+                                // rather than a trip through the season list.
+                                onOpenEpisode = { item, season, episode, anchor ->
+                                    showOptions(HomeOptionTarget(item, season, episode), anchor)
+                                },
+                                onItemLongClick = { item, season, episode, anchor ->
+                                    showOptions(HomeOptionTarget(item, season, episode), anchor)
                                 },
                                 onItemFocused = viewModel::onFocused,
-                                isWatched = { _, item -> watchedIds.contains(item.tmdbId) },
+                                watchedIds = watchedIds,
+                                watchedEpisodes = watchedEpisodes,
                                 requestInitialFocus = requestInitialFocus,
                                 onInitialFocusHandled = onInitialSpotlightFocusHandled,
                             )
@@ -992,7 +1001,7 @@ fun HomeScreen(
 @Composable
 private fun AddonCatalogRow(
     catalog: AddonCatalog,
-    itemFlow: StateFlow<List<MediaItem>>,
+    itemFlow: StateFlow<List<AddonCatalogItem>>,
     isEditMode: Boolean,
     onToggleVisibility: () -> Unit,
     canMoveUp: Boolean,
@@ -1003,17 +1012,20 @@ private fun AddonCatalogRow(
     onDelete: () -> Unit,
     onEnsure: () -> Unit,
     onItemClick: (MediaItem) -> Unit,
-    onItemLongClick: (MediaItem, PosterCardAnchor) -> Unit,
+    onOpenEpisode: (MediaItem, Int, Int, PosterCardAnchor) -> Unit,
+    onItemLongClick: (MediaItem, Int?, Int?, PosterCardAnchor) -> Unit,
     onItemFocused: (MediaItem) -> Unit,
-    isWatched: ((Int, MediaItem) -> Boolean)? = null,
+    watchedIds: Set<Int>,
+    watchedEpisodes: Set<String>,
     requestInitialFocus: Boolean = false,
     onInitialFocusHandled: () -> Unit = {},
 ) {
     val items by itemFlow.collectAsStateWithLifecycle()
+    val cards = remember(items) { items.map { it.media } }
     LaunchedEffect(catalog.addonBase, catalog.key) { onEnsure() }
     MediaRow(
         title = catalog.name,
-        items = items,
+        items = cards,
         isEditMode = isEditMode,
         hidden = catalog.hidden,
         onToggleVisibility = onToggleVisibility,
@@ -1023,10 +1035,36 @@ private fun AddonCatalogRow(
         onMoveDown = onMoveDown,
         onRename = onRename,
         onDelete = onDelete,
-        onItemClick = onItemClick,
-        onItemLongClickIndexed = { _, item, anchor -> onItemLongClick(item, anchor) },
+        // Season and episode belong in the key: a channel's running order can
+        // schedule two episodes of the same show, and without them the second
+        // card carries the first one's key.
+        key = { itemIndex, item ->
+            val entry = items.getOrNull(itemIndex)
+            "${item.key}:${entry?.season ?: 0}:${entry?.episode ?: 0}"
+        },
+        onItemClickIndexedWithAnchor = { itemIndex, item, anchor ->
+            val entry = items.getOrNull(itemIndex)
+            val season = entry?.season
+            val episode = entry?.episode
+            if (season != null && episode != null) {
+                onOpenEpisode(item, season, episode, anchor)
+            } else {
+                onItemClick(item)
+            }
+        },
+        onItemLongClickIndexed = { itemIndex, item, anchor ->
+            val entry = items.getOrNull(itemIndex)
+            onItemLongClick(item, entry?.season, entry?.episode, anchor)
+        },
         onItemFocused = onItemFocused,
-        isWatched = isWatched,
+        isWatched = { itemIndex, item ->
+            val entry = items.getOrNull(itemIndex)
+            if (entry?.season != null && entry.episode != null) {
+                watchedEpisodes.contains("${item.tmdbId}:${entry.season}:${entry.episode}")
+            } else {
+                watchedIds.contains(item.tmdbId)
+            }
+        },
         requireDoubleTapToOpen = HubColors.isNetflixLayout || HubColors.isPrimefly,
         requestInitialFocus = requestInitialFocus,
         onInitialFocusHandled = onInitialFocusHandled,

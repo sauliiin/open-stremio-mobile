@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.model.AddonCatalog
+import com.mdblisthub.tv.core.model.AddonCatalogItem
 import com.mdblisthub.tv.core.model.LibraryBucket
 import com.mdblisthub.tv.core.model.MediaList
 import com.mdblisthub.tv.core.model.MediaType
@@ -64,7 +65,7 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
      * reappearing as an empty, zero-height item during focus search.
      */
     private val itemFlows = mutableMapOf<Long, StateFlow<List<MediaItem>>>()
-    private val catalogItemFlows = mutableMapOf<String, MutableStateFlow<List<MediaItem>>>()
+    private val catalogItemFlows = mutableMapOf<String, MutableStateFlow<List<AddonCatalogItem>>>()
     private val catalogLoadJobs = mutableMapOf<String, Job>()
     private val loadedCatalogs = mutableSetOf<String>()
     private val loadingMoreLists = mutableSetOf<Long>()
@@ -440,7 +441,7 @@ class HomeViewModel(private val graph: DataGraph) : ViewModel() {
         if (item.tmdbId > 0) graph.prefetcher.prefetch(item.type, item.tmdbId)
     }
 
-    fun itemsForCatalog(catalog: AddonCatalog): StateFlow<List<MediaItem>> =
+    fun itemsForCatalog(catalog: AddonCatalog): StateFlow<List<AddonCatalogItem>> =
         catalogItemFlows.getOrPut(catalogCacheKey(catalog)) {
             MutableStateFlow(emptyList())
         }.asStateFlow()

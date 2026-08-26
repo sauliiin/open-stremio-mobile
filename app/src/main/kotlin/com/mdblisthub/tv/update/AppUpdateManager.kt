@@ -89,7 +89,6 @@ class AppUpdateManager(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val json = Json { ignoreUnknownKeys = true }
     private val updateDirectory = File(activity.cacheDir, "updates")
-    private val preferences = activity.getSharedPreferences(UPDATE_PREFERENCES, Activity.MODE_PRIVATE)
 
     private val _state = MutableStateFlow<UpdateUiState>(UpdateUiState.Hidden)
     val state: StateFlow<UpdateUiState> = _state.asStateFlow()
@@ -100,22 +99,19 @@ class AppUpdateManager(
     private var waitingForInstallPermission = false
 
     /**
-     * Checked once per cold start with no cooldown at all before this: every
-     * launch was a GitHub GET, which is one small request but an unbounded
-     * one — a viewer opening and closing the app repeatedly would fire it
-     * every single time. [CHECK_INTERVAL_MS] caps that to a few times a day;
-     * [retry] still passes `force = true` so a viewer who explicitly asks
-     * again after a failure is never told to come back later.
+     * Runs on every cold start, with no cooldown.
+     *
+     * A GitHub release *is* the delivery channel for this app, so the check
+     * being a beat behind reads as the updater being broken. It costs one
+     * small JSON GET against a launch the viewer performed themselves, which
+     * is a cheaper thing than any window in which a shipped release stays
+     * invisible.
      */
-    fun checkForUpdate(force: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (!force && now - preferences.getLong(LAST_CHECK_AT, 0L) < CHECK_INTERVAL_MS) return
-
+    fun checkForUpdate() {
         scope.launch {
             val release = runCatching { withContext(Dispatchers.IO) { fetchLatestRelease() } }
                 .getOrNull()
                 ?: return@launch // Startup checks stay quiet when the device is offline.
-            preferences.edit().putLong(LAST_CHECK_AT, System.currentTimeMillis()).apply()
 
             val installedVersion = runCatching {
                 activity.packageManager.getPackageInfo(activity.packageName, 0).versionName.orEmpty()
@@ -162,7 +158,7 @@ class AppUpdateManager(
     fun retry() {
         val failure = _state.value as? UpdateUiState.Failed
         val release = failure?.release
-        if (release == null) checkForUpdate(force = true) else downloadAndInstall(release)
+        if (release == null) checkForUpdate() else downloadAndInstall(release)
     }
 
     fun openInstallPermissionSettings() {
@@ -322,9 +318,6 @@ class AppUpdateManager(
         const val APK_MIME_TYPE = "application/vnd.android.package-archive"
         const val NETWORK_TIMEOUT_MS = 20_000
         const val PROGRESS_STEP_BYTES = 128L * 1024L
-        const val UPDATE_PREFERENCES = "app-update-checks"
-        const val LAST_CHECK_AT = "last-successful-check-at"
-        const val CHECK_INTERVAL_MS = 3L * 60L * 60L * 1_000L
     }
 }
 

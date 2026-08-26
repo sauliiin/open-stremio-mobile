@@ -55,6 +55,7 @@
     <string name="lang_pt">Portuguese</string>
     <string name="lang_en">English</string>
     <string name="lang_es">Spanish</string>
+    <string name="lang_fr">French</string>
     <string name="detail_watch">Watch</string>
     <string name="detail_watch_episode">Watch S%1$dE%2$d</string>
     <string name="detail_select_source">Select Source</string>
@@ -259,6 +260,10 @@
     <string name="login_error_no_detail">no detail</string>
     <string name="login_error_no_activity">Could not open the Google sign-in window on this device.</string>
     <string name="login_key_placeholder">MDBList API key</string>
+    <string name="settings_mdblist_key_title">MDBList key</string>
+    <string name="settings_mdblist_key_description">Ratings, trailers, your lists and the watchlist all come from this key. Paste a new one to switch accounts — it is checked before anything is saved.</string>
+    <string name="settings_mdblist_key_change">Connected — tap to change the key</string>
+    <string name="settings_mdblist_key_add">Not connected — tap to add a key</string>
     <string name="login_link_mdblist">Link MDBList</string>
     <string name="login_continue_without">Continue without MDBList</string>
     <string name="login_create_account">Create a free account</string>
@@ -338,6 +343,7 @@
     <string name="error_addon_install_timed_out">The addon took too long to respond. Some take almost a minute the first time, while they validate the debrid key — try again, the second attempt is usually instant.</string>
     <string name="error_addon_manifest_unreadable">Could not read the manifest. Check the URL — many addons generate a per-user address on their configuration page; that is the one to paste here, not the site’s address.</string>
     <string name="error_addon_manifest_invalid">The address answered, but it is not a Stremio addon manifest.</string>
+    <string name="error_addon_not_configured">The addon answered, but it is not configured yet: this address carries no catalogs. Open its configuration page, check the generated address character by character (O and 0 are easy to swap) and paste that one here.</string>
     <string name="error_mdblist_not_linked">Link your MDBList account first.</string>
     <string name="error_mdblist_no_lists">Your MDBList account returned no lists.</string>
     <string name="error_mdblist_no_valid_manifests">MDBList did not generate any valid addon manifest.</string>
