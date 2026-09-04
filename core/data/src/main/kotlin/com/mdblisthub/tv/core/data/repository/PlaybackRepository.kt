@@ -4,9 +4,11 @@ import com.mdblisthub.tv.core.data.UiPreferencesStore
 import com.mdblisthub.tv.core.data.mapper.toDomain
 import com.mdblisthub.tv.core.data.repository.source.PlaybackSource
 import com.mdblisthub.tv.core.database.HubDatabase
+import com.mdblisthub.tv.core.database.entity.PlaybackHintEntity
 import com.mdblisthub.tv.core.database.entity.ResumeEntity
 import com.mdblisthub.tv.core.model.LibraryProvider
 import com.mdblisthub.tv.core.model.MediaType
+import com.mdblisthub.tv.core.model.PlaybackHint
 import com.mdblisthub.tv.core.model.ResumePoint
 import com.mdblisthub.tv.core.model.ScrobbleTarget
 import kotlinx.coroutines.async
@@ -82,6 +84,38 @@ class PlaybackRepository(
         }.awaitAll()
     }
 
+    /**
+     * This app's own note about the last time it played [target], or null.
+     *
+     * See [PlaybackHint] for what the note buys. It is only ever a *hint*:
+     * every caller has to work without one, because the row is local and the
+     * cache it lives in is thrown away on a schema change by design.
+     */
+    suspend fun hintFor(target: ScrobbleTarget): PlaybackHint? =
+        dao.playbackHint(target.localKey())?.let {
+            PlaybackHint(
+                positionMs = it.positionMs,
+                durationMs = it.durationMs,
+                sourceFilename = it.sourceFilename,
+            )
+        }
+
+    /** Records where playback actually is, and on which release. */
+    suspend fun saveHint(target: ScrobbleTarget, hint: PlaybackHint) {
+        // A position of zero is the state before anything has been watched,
+        // and storing it would answer a later resume with "start again".
+        if (hint.positionMs <= 0 || hint.durationMs <= 0) return
+        dao.upsertPlaybackHint(
+            PlaybackHintEntity(
+                key = target.localKey(),
+                positionMs = hint.positionMs,
+                durationMs = hint.durationMs,
+                sourceFilename = hint.sourceFilename,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
     suspend fun resumeFor(target: ScrobbleTarget): Float? =
         resumePoints.first().firstOrNull { it.matches(target) }?.progress
 
@@ -108,6 +142,10 @@ class PlaybackRepository(
         val stored = dao.resumePoint(key)
         val result = runCatching { source().clear(target, stored?.playbackId) }
         dao.deleteResumePoint(key)
+        // The local note goes with it. "Remove from continue watching" means
+        // the title starts fresh next time, and a surviving hint would answer
+        // the next play with the position that was just discarded.
+        dao.deletePlaybackHint(target.localKey())
         return result
     }
 

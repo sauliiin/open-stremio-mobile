@@ -22,6 +22,7 @@ import com.mdblisthub.tv.player.PlaybackController
 import com.mdblisthub.tv.player.PlaybackPhase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asFlow
@@ -122,6 +123,7 @@ class PlayerViewModel(
     init {
         viewModelScope.launch { start() }
         viewModelScope.launch { reportPlaybackToMdblist() }
+        viewModelScope.launch { keepHintCurrent() }
         viewModelScope.launch { autoSelectAudio() }
         viewModelScope.launch { autoSelectSubtitle() }
     }
@@ -178,6 +180,10 @@ class PlayerViewModel(
                     offline,
                     graph.playback.resumeFor(scrobbleTarget),
                     expectedRuntimeMinutes(cachedDetail, card),
+                    // Room, not the network — the note this app left itself
+                    // last time. Null on a first watch, and everything
+                    // downstream works without one.
+                    hint = graph.playback.hintFor(scrobbleTarget),
                 )
                 return
             }
@@ -198,6 +204,7 @@ class PlayerViewModel(
         }
 
         val resumeAt = graph.playback.resumeFor(scrobbleTarget)
+        val hint = graph.playback.hintFor(scrobbleTarget)
         val runtimeMinutes = expectedRuntimeMinutes(cachedDetail, card)
 
         if (downloadOffline) {
@@ -219,6 +226,7 @@ class PlayerViewModel(
             // Manual selection uses the repository's normal fast discovery.
             // Sources that fail after being picked are removed immediately.
             validateSelectedSources = false,
+            hint = hint,
         )
 
         // Subtitles are fetched after playback has been handed off: they take
@@ -389,6 +397,24 @@ class PlayerViewModel(
     }
 
     /**
+     * Keeps the local note current while nothing is transitioning.
+     *
+     * [reportPlaybackToMdblist] only wakes on a phase change, and a film
+     * watched straight through has none between the first frame and the last —
+     * where the process being killed, the handset losing power or the app
+     * being swapped away would leave the note reading zero. This is the
+     * heartbeat that makes the note survive all three; the write is one upsert
+     * into Room, so its cost at this interval is nil.
+     */
+    private suspend fun keepHintCurrent() {
+        while (true) {
+            delay(HINT_SAVE_INTERVAL_MS)
+            val current = target ?: continue
+            controller.hint()?.let { graph.playback.saveHint(current, it) }
+        }
+    }
+
+    /**
      * mdblist owns the playback position, so every transition is reported.
      * Past 80% it marks the title watched on its own.
      */
@@ -398,6 +424,12 @@ class PlayerViewModel(
             .collect { state ->
                 val current = target ?: return@collect
                 lastReportedProgress = state.progress * 100f
+
+                // Written on the same transitions the provider is told about,
+                // because they are the same moments worth recording — and the
+                // local row is what the *next* play reads to skip the cascade
+                // and land on the exact frame. See `PlaybackHint`.
+                controller.hint()?.let { graph.playback.saveHint(current, it) }
 
                 when (state.phase) {
                     PlaybackPhase.PLAYING -> graph.playback.start(current, lastReportedProgress)
@@ -563,15 +595,28 @@ class PlayerViewModel(
     override fun onCleared() {
         val current = target
         val progress = controller.progressPercent().takeIf { it > 0f } ?: lastReportedProgress
+        // Read before `release()` below, which takes the position with it.
+        val hint = controller.hint()
 
         // Fire-and-forget on the application scope: the ViewModel's own scope
         // is already cancelled by the time this runs, and losing the stop is
         // losing the resume point.
         if (current != null && progress > 0f) {
-            graph.scope.launch { graph.playback.stop(current, progress) }
+            graph.scope.launch {
+                hint?.let { graph.playback.saveHint(current, it) }
+                graph.playback.stop(current, progress)
+            }
         }
         controller.release()
         graph.imageMemoryTrimmer.restore()
         super.onCleared()
     }
 }
+
+/**
+ * How often the local playback note is refreshed while nothing else is
+ * happening — see [PlayerViewModel.keepHintCurrent]. Half a minute is finer
+ * than anyone notices a resume being wrong by, and coarse enough that the
+ * write never competes with playback.
+ */
+private const val HINT_SAVE_INTERVAL_MS = 30_000L
