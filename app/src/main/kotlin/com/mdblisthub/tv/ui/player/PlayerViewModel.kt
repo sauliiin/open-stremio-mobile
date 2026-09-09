@@ -7,6 +7,7 @@ import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.data.mapper.Languages
 import com.mdblisthub.tv.core.data.mapper.SubtitleMatcher
 import com.mdblisthub.tv.core.model.CastMember
+import com.mdblisthub.tv.core.model.Episode
 import com.mdblisthub.tv.core.model.MediaDetail
 import com.mdblisthub.tv.core.model.MediaItem
 import com.mdblisthub.tv.core.model.MediaType
@@ -48,6 +49,15 @@ data class PlayerUiState(
     val missingImdbId: Boolean = false,
     /** The first deeply validated <=5 GB source should be downloaded immediately. */
     val autoOfflineSelection: Boolean = false,
+    /** The real metadata row that follows the episode currently playing. */
+    val nextEpisode: NextEpisodeTarget? = null,
+)
+
+data class NextEpisodeTarget(
+    val season: Int,
+    val episode: Int,
+    val name: String,
+    val stillUrl: String?,
 )
 
 /** The compact biography card that follows focus in the player's cast rail. */
@@ -116,6 +126,8 @@ class PlayerViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     val subtitleBackgroundOpacity: StateFlow<Int> = graph.uiPreferences.subtitleBackgroundOpacity
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 40)
+    val autoPlayNextEpisode: StateFlow<Boolean> = graph.uiPreferences.autoPlayNextEpisode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private var target: ScrobbleTarget? = null
     private var lastReportedProgress = 0f
@@ -165,6 +177,20 @@ class PlayerViewModel(
 
         viewModelScope.launch {
             hydration.await()?.let { publishArtwork(it, card) }
+        }
+
+        if (type == MediaType.SHOW && season != null && episode != null) {
+            viewModelScope.launch {
+                // The common in-season answer comes from Room/TMDB season
+                // metadata and must not wait behind the heavier detail fan-
+                // out. Only retry with the freshly hydrated season index when
+                // the cached information could not name a successor.
+                val next = findNextEpisode(cachedDetail)
+                    ?: hydration.await()?.let { refreshed -> findNextEpisode(refreshed) }
+                next?.let {
+                    _ui.update { it.copy(nextEpisode = next) }
+                }
+            }
         }
 
         val scrobbleTarget = ScrobbleTarget(type, tmdbId, imdbId, season, episode)
@@ -326,6 +352,38 @@ class PlayerViewModel(
                 cast = detail?.cast?.takeIf { members -> members.isNotEmpty() } ?: it.cast,
             )
         }
+    }
+
+    /**
+     * Resolves the next episode-order metadata row instead of assuming episode
+     * numbers are contiguous. When the current season ends, the first real
+     * episode in the next populated season is used, so specials and gaps do
+     * not accidentally become fabricated playback routes.
+     */
+    private suspend fun findNextEpisode(detail: MediaDetail?): NextEpisodeTarget? {
+        val currentSeason = season ?: return null
+        val currentEpisode = episode ?: return null
+
+        graph.media.ensureEpisodes(tmdbId, currentSeason)
+        nextEpisodeAfter(
+            episodes = graph.media.observeEpisodes(tmdbId, currentSeason).first(),
+            currentEpisode = currentEpisode,
+        )?.let { return it.toNextEpisodeTarget() }
+
+        val laterSeasons = detail?.seasons
+            .orEmpty()
+            .asSequence()
+            .filter { it.seasonNumber > currentSeason && it.episodeCount > 0 }
+            .sortedBy { it.seasonNumber }
+
+        for (laterSeason in laterSeasons) {
+            graph.media.ensureEpisodes(tmdbId, laterSeason.seasonNumber)
+            graph.media.observeEpisodes(tmdbId, laterSeason.seasonNumber)
+                .first()
+                .minByOrNull { it.episodeNumber }
+                ?.let { return it.toNextEpisodeTarget() }
+        }
+        return null
     }
 
     /**
@@ -622,3 +680,16 @@ class PlayerViewModel(
  * write never competes with playback.
  */
 private const val HINT_SAVE_INTERVAL_MS = 30_000L
+
+internal fun nextEpisodeAfter(episodes: List<Episode>, currentEpisode: Int): Episode? =
+    episodes
+        .asSequence()
+        .filter { it.episodeNumber > currentEpisode }
+        .minByOrNull { it.episodeNumber }
+
+private fun Episode.toNextEpisodeTarget() = NextEpisodeTarget(
+    season = seasonNumber,
+    episode = episodeNumber,
+    name = name,
+    stillUrl = stillUrl,
+)

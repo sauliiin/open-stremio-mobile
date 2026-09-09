@@ -7,12 +7,17 @@ import android.media.AudioManager
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -60,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -104,6 +110,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -123,6 +130,7 @@ import com.mdblisthub.tv.core.model.SubtitleOption
 import com.mdblisthub.tv.core.ui.component.FanartBackdrop
 import com.mdblisthub.tv.core.ui.component.HubSpinner
 import com.mdblisthub.tv.core.ui.theme.HubColors
+import com.mdblisthub.tv.core.ui.theme.HubTokens
 import com.mdblisthub.tv.player.ExoVideoSurface
 import com.mdblisthub.tv.player.MAX_SUBTITLE_OFFSET_MS
 import com.mdblisthub.tv.player.NO_TRACK
@@ -139,6 +147,8 @@ import kotlinx.coroutines.delay
 private const val OSD_TIMEOUT_MS = 4_000L
 private const val EDGE_GESTURE_WIDTH_FRACTION = 0.30f
 private const val MIN_WINDOW_BRIGHTNESS = 0.01f
+private const val AUTO_NEXT_THRESHOLD = 0.93f
+private const val AUTO_NEXT_COUNTDOWN_MS = 10_000
 
 /**
  * Caption metrics. The line height is ~1.35x the glyph size — roughly what
@@ -223,6 +233,7 @@ fun PlayerScreen(
     startFromBeginning: Boolean = false,
     onBack: () -> Unit,
     onOpenAddons: () -> Unit,
+    onPlayNextEpisode: (season: Int, episode: Int) -> Unit,
 ) {
     val appContext = LocalContext.current.applicationContext
     val hostActivity = LocalHostActivity.current
@@ -268,6 +279,69 @@ fun PlayerScreen(
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val castPreview by viewModel.castPreview.collectAsStateWithLifecycle()
     val playback by viewModel.controller.state.collectAsStateWithLifecycle()
+    val autoPlayNextEpisode by viewModel.autoPlayNextEpisode.collectAsStateWithLifecycle()
+
+    var nextPromptVisible by remember(type, tmdbId, season, episode) { mutableStateOf(false) }
+    var nextPromptTriggered by remember(type, tmdbId, season, episode) { mutableStateOf(false) }
+    var playNextAtCountdownEnd by remember(type, tmdbId, season, episode) { mutableStateOf(true) }
+    var countdownProgress by remember(type, tmdbId, season, episode) { mutableFloatStateOf(1f) }
+    val latestPlayNextAtCountdownEnd by rememberUpdatedState(playNextAtCountdownEnd)
+    val latestNextEpisode by rememberUpdatedState(ui.nextEpisode)
+
+    LaunchedEffect(
+        autoPlayNextEpisode,
+        ui.nextEpisode?.season,
+        ui.nextEpisode?.episode,
+        playback.phase,
+        playback.progress,
+    ) {
+        if (!autoPlayNextEpisode) {
+            nextPromptVisible = false
+            nextPromptTriggered = false
+            return@LaunchedEffect
+        }
+        if (shouldOfferNextEpisode(
+                enabled = autoPlayNextEpisode,
+                hasNextEpisode = ui.nextEpisode != null,
+                phase = playback.phase,
+                progress = playback.progress,
+                alreadyTriggered = nextPromptTriggered,
+            )
+        ) {
+            playNextAtCountdownEnd = true
+            nextPromptTriggered = true
+            nextPromptVisible = true
+        }
+    }
+
+    LaunchedEffect(
+        nextPromptVisible,
+        autoPlayNextEpisode,
+        ui.nextEpisode?.season,
+        ui.nextEpisode?.episode,
+    ) {
+        if (!nextPromptVisible || !autoPlayNextEpisode) return@LaunchedEffect
+        // This is a deadline, not merely a visual animation. Compose honors
+        // Android's animator-duration scale, so driving the action from a
+        // 10-second tween made it fire in 5 real seconds on devices configured
+        // with a 0.5x animation scale. Recomputing from elapsed realtime keeps
+        // both the red rule and the action at ten actual seconds regardless of
+        // accessibility/developer animation settings.
+        val startedAt = SystemClock.elapsedRealtime()
+        val deadline = startedAt + AUTO_NEXT_COUNTDOWN_MS
+        do {
+            countdownProgress = (
+                (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0L).toFloat() /
+                    AUTO_NEXT_COUNTDOWN_MS
+                ).coerceIn(0f, 1f)
+            if (countdownProgress > 0f) withFrameNanos { }
+        } while (countdownProgress > 0f)
+        val next = latestNextEpisode
+        nextPromptVisible = false
+        if (latestPlayNextAtCountdownEnd && next != null) {
+            onPlayNextEpisode(next.season, next.episode)
+        }
+    }
 
     val automaticOfflineSource = playback.availableSources.firstOrNull()
     LaunchedEffect(
@@ -313,7 +387,7 @@ fun PlayerScreen(
     var castRailOpen by remember { mutableStateOf(false) }
     var edgeAdjustment by remember { mutableStateOf<EdgeAdjustment?>(null) }
     var edgeAdjustmentVersion by remember { mutableIntStateOf(0) }
-    val overlayOpen = subtitlePickerOpen || subtitleSyncOpen || audioPickerOpen
+    val overlayOpen = subtitlePickerOpen || subtitleSyncOpen || audioPickerOpen || nextPromptVisible
 
     /**
      * The sync overlay deliberately does not count here.
@@ -393,6 +467,10 @@ fun PlayerScreen(
 
     BackHandler {
         when {
+            nextPromptVisible -> {
+                playNextAtCountdownEnd = false
+                nextPromptVisible = false
+            }
             subtitleSyncOpen -> {
                 subtitleSyncOpen = false
                 subtitlePickerOpen = true
@@ -858,7 +936,174 @@ fun PlayerScreen(
             },
         )
     }
+
+    Box(Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = nextPromptVisible && ui.nextEpisode != null,
+            enter = slideInHorizontally(
+                initialOffsetX = { width -> width },
+                animationSpec = tween(HubTokens.Motion.slowMillis, easing = FastOutSlowInEasing),
+            ) + fadeIn(animationSpec = tween(HubTokens.Motion.normalMillis)),
+            exit = slideOutHorizontally(
+                targetOffsetX = { width -> width },
+                animationSpec = tween(HubTokens.Motion.normalMillis, easing = FastOutSlowInEasing),
+            ) + fadeOut(animationSpec = tween(HubTokens.Motion.fastMillis)),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(28.dp),
+        ) {
+            ui.nextEpisode?.let { next ->
+                NextEpisodePrompt(
+                    next = next,
+                    playAtCountdownEnd = playNextAtCountdownEnd,
+                    countdownProgress = countdownProgress,
+                    onToggleAction = {
+                        playNextAtCountdownEnd = !playNextAtCountdownEnd
+                    },
+                )
+            }
+        }
+    }
 }
+
+/**
+ * Credits-time prompt inspired by the compact Netflix next-episode card: it
+ * enters from the right, takes focus immediately, and uses the red rule along
+ * its foot as the ten-second clock. The selected label is the action that
+ * will win when that clock reaches zero, exactly as the setting promises.
+ */
+@Composable
+private fun NextEpisodePrompt(
+    next: NextEpisodeTarget,
+    playAtCountdownEnd: Boolean,
+    countdownProgress: Float,
+    onToggleAction: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val focusRequester = remember(next.season, next.episode) { FocusRequester() }
+    var focused by remember(next.season, next.episode) { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (focused) 1.025f else 1f,
+        animationSpec = tween(HubTokens.Motion.fastMillis, easing = HubTokens.Motion.standard),
+        label = "next-episode-focus",
+    )
+    val shape = RoundedCornerShape(6.dp)
+
+    LaunchedEffect(next.season, next.episode) {
+        withFrameNanos { }
+        focusRequester.requestFocus()
+    }
+
+    Box(
+        modifier = modifier
+            .widthIn(min = 330.dp, max = 390.dp)
+            .height(148.dp)
+            .scale(scale)
+            .clip(shape)
+            .background(Color(0xF20D0D0D))
+            .border(
+                width = if (focused) 3.dp else 1.dp,
+                color = if (focused) Color.White else Color.White.copy(alpha = 0.28f),
+                shape = shape,
+            )
+            .focusRequester(focusRequester)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onToggleAction)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Row(Modifier.fillMaxSize()) {
+            if (!next.stillUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = next.stillUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .width(146.dp)
+                        .fillMaxHeight(),
+                )
+            } else {
+                Box(
+                    Modifier
+                        .width(112.dp)
+                        .fillMaxHeight()
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFF2B2B2B), Color(0xFF111111)),
+                            ),
+                        ),
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.player_next_episode),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(
+                        R.string.player_next_episode_number,
+                        next.season,
+                        next.episode,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.68f),
+                    maxLines = 1,
+                )
+                if (next.name.isNotBlank()) {
+                    Text(
+                        text = next.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.86f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        if (playAtCountdownEnd) {
+                            R.string.player_play_next_episode
+                        } else {
+                            R.string.player_stop_next_episode
+                        },
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (playAtCountdownEnd) HubColors.NetflixRed else Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        Box(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth(countdownProgress.coerceIn(0f, 1f))
+                .height(4.dp)
+                .background(HubColors.NetflixRed),
+        )
+    }
+}
+
+internal fun shouldOfferNextEpisode(
+    enabled: Boolean,
+    hasNextEpisode: Boolean,
+    phase: PlaybackPhase,
+    progress: Float,
+    alreadyTriggered: Boolean,
+): Boolean = enabled && hasNextEpisode && !alreadyTriggered &&
+    phase == PlaybackPhase.PLAYING && progress >= AUTO_NEXT_THRESHOLD
 
 internal enum class PlayerEdgeControl { BRIGHTNESS, VOLUME }
 

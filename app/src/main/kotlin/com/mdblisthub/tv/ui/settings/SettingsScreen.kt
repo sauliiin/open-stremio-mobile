@@ -164,6 +164,7 @@ data class SettingsUiState(
     val autotrailer: Boolean = false,
     val introEnabled: Boolean = false,
     val audioLanguage: String = "en",
+    val autoPlayNextEpisode: Boolean = false,
     val libraryProvider: LibraryProvider = LibraryProvider.MDBLIST,
     val dimUnwatchedEpisodes: Boolean = false,
     val traktAccount: TraktAccount? = null,
@@ -258,6 +259,9 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
                 }
                 .combine(graph.uiPreferences.introEnabled) { partial, value ->
                     partial.copy(introEnabled = value)
+                }
+                .combine(graph.uiPreferences.autoPlayNextEpisode) { partial, value ->
+                    partial.copy(autoPlayNextEpisode = value)
                 }
                 .collect { _state.value = it }
         }
@@ -445,6 +449,9 @@ class SettingsViewModel(private val graph: DataGraph) : ViewModel() {
         graph.uiPreferences.saveSubtitleBackgroundOpacity(value)
     }
     fun setAudioLanguage(lang: String) = viewModelScope.launch { graph.uiPreferences.saveAudioLanguage(lang) }
+    fun toggleAutoPlayNextEpisode() = viewModelScope.launch {
+        graph.uiPreferences.saveAutoPlayNextEpisode(!_state.value.autoPlayNextEpisode)
+    }
     fun toggleDimUnwatchedEpisodes() = viewModelScope.launch { graph.uiPreferences.saveDimUnwatchedEpisodes(!_state.value.dimUnwatchedEpisodes) }
 
     // The bottom nav dropped its own theme-cycle button once this section
@@ -1074,6 +1081,17 @@ private fun SettingsPagePane(
             SettingsDestination.PLAYBACK -> item(key = "playback-options") {
                 ModernSettingsGroup(stringResource(R.string.settings_section_player)) {
                     HubSettingRow(
+                        title = stringResource(R.string.settings_auto_play_next_episode),
+                        trailing = {
+                            HubToggle(
+                                checked = state.autoPlayNextEpisode,
+                                onCheckedChange = { viewModel.toggleAutoPlayNextEpisode() },
+                            )
+                        },
+                        onClick = viewModel::toggleAutoPlayNextEpisode,
+                    )
+                    SettingsDivider()
+                    HubSettingRow(
                         title = stringResource(R.string.settings_audio_preferred_lang),
                         description = ALL_LANGUAGES.firstOrNull { it.first == state.audioLanguage }?.second,
                         trailing = {
@@ -1520,6 +1538,16 @@ private fun LegacySettingsScreen(graph: DataGraph, onBack: () -> Unit) {
 
         item(key = "player") {
             SettingsCard(title = stringResource(R.string.settings_section_player)) {
+                SettingsRow(label = stringResource(R.string.settings_auto_play_next_episode)) {
+                    HubButton(
+                        text = stringResource(
+                            if (state.autoPlayNextEpisode) R.string.settings_on else R.string.settings_off,
+                        ),
+                        primary = state.autoPlayNextEpisode,
+                        onClick = viewModel::toggleAutoPlayNextEpisode,
+                    )
+                }
+
                 SettingsRow(label = stringResource(R.string.settings_audio_preferred_lang)) {
                     val currentName = ALL_LANGUAGES.find { it.first == state.audioLanguage }?.second ?: state.audioLanguage
                     HubButton(

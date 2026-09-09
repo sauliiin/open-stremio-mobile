@@ -358,10 +358,12 @@ fun HubNavHost(graph: DataGraph) {
             ),
         ) { entry ->
             val args = entry.arguments
+            val playerType = MediaType.parse(args?.getString("type"))
+            val playerTmdbId = args?.getInt("tmdbId") ?: 0
             PlayerScreen(
                 graph = graph,
-                type = MediaType.parse(args?.getString("type")),
-                tmdbId = args?.getInt("tmdbId") ?: 0,
+                type = playerType,
+                tmdbId = playerTmdbId,
                 season = args?.getInt("season")?.takeIf { it > 0 },
                 episode = args?.getInt("episode")?.takeIf { it > 0 },
                 manualSelect = args?.getBoolean("select") ?: false,
@@ -369,6 +371,17 @@ fun HubNavHost(graph: DataGraph) {
                 startFromBeginning = args?.getBoolean("restart") ?: false,
                 onBack = { navController.popBackStack() },
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
+                onPlayNextEpisode = { nextSeason, nextEpisode ->
+                    navController.navigate(
+                        Routes.player(playerType, playerTmdbId, nextSeason, nextEpisode),
+                    ) {
+                        // Replace this playback rather than stacking it. The
+                        // old entry is destroyed immediately, which releases
+                        // its controller before the next source starts.
+                        popUpTo(entry.destination.id) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
             )
         }
         }
