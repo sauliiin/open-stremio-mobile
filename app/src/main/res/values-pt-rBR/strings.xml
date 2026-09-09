@@ -59,12 +59,14 @@
     <string name="detail_watch">Assistir</string>
     <string name="detail_watch_episode">Assistir T%1$dE%2$d</string>
     <string name="detail_select_source">Selecionar Fonte</string>
-    <string name="detail_episode_source_hint">Toque para detalhes · segure para fontes</string>
+    <string name="detail_episode_source_hint">Toque para detalhes · segure para opções</string>
     <string name="detail_episode_number">Temporada %1$d · Episódio %2$d</string>
     <string name="detail_episode_runtime">%1$d min</string>
     <string name="detail_episode_rating">Nota %1$.1f</string>
     <string name="detail_episode_no_overview">Sinopse indisponível para este episódio.</string>
     <string name="detail_clear_progress">Resetar Progresso</string>
+    <string name="detail_abandon_series">Abandonar Série</string>
+    <string name="detail_watch_from_beginning">Assistir desde o início</string>
     <string name="detail_offline">Offline</string>
     <string name="detail_offline_downloading">Offline %1$.1f%%</string>
     <string name="detail_offline_cancel">Cancelar offline</string>
@@ -208,6 +210,8 @@
     <string name="player_subtitles">Legenda</string>
     <string name="player_audio">Faixa de áudio</string>
     <string name="player_audio_short">Áudio</string>
+    <string name="player_volume">Volume</string>
+    <string name="player_brightness">Brilho</string>
     <string name="player_scale_short">Esticar</string>
     <string name="player_cast">Elenco</string>
     <string name="player_no_subtitle">Sem legenda</string>
@@ -349,6 +353,7 @@
     <string name="error_mdblist_no_valid_manifests">A MDBList não gerou nenhum manifest de addon válido.</string>
     <string name="error_mdblist_key_required">Informe a chave da API da MDBList.</string>
     <string name="error_mdblist_write_rejected">mdblist respondeu %1$d.</string>
+    <string name="error_mdblist_title_not_recognized">O MDBList não reconheceu ou atualizou esta série.</string>
     <string name="error_mdblist_session_expired">Sessão expirada.</string>
     <string name="error_google_sign_in_required">Entre com o Google primeiro.</string>
     <string name="error_google_account_changed_restore">A conta Google mudou durante a restauração.</string>

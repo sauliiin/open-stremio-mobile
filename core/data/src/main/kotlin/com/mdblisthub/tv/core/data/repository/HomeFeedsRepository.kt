@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -71,6 +72,14 @@ class HomeFeedsRepository(
                 items = items[default.key].orEmpty(),
             )
         }
+    }
+
+    /** Whether this series is currently one of the selected provider's Up Next shows. */
+    fun observeUpNextMembership(tmdbId: Int): Flow<Boolean> = observeFeeds().map { feeds ->
+        feeds.firstOrNull { it.key == MdblistHomeFeedKeys.UP_NEXT }
+            ?.items
+            .orEmpty()
+            .any { it.media.tmdbId == tmdbId }
     }
 
     suspend fun refresh() {
@@ -149,6 +158,21 @@ class HomeFeedsRepository(
      */
     fun onProviderChanged() {
         content.value = OwnedFeedContent()
+    }
+
+    /** Removes an abandoned show from Up Next immediately, ahead of the next network refresh. */
+    suspend fun dismissFromUpNext(tmdbId: Int, imdbId: String?) {
+        val owner = ownerKey(preferences.currentLibraryProvider(), session.currentKey())
+        val current = content.value
+        if (current.ownerKey != owner) return
+
+        val remaining = current.items[MdblistHomeFeedKeys.UP_NEXT].orEmpty().filterNot { item ->
+            (tmdbId > 0 && item.media.tmdbId == tmdbId) ||
+                (imdbId != null && item.media.imdbId == imdbId)
+        }
+        content.value = current.copy(
+            items = current.items + (MdblistHomeFeedKeys.UP_NEXT to remaining),
+        )
     }
 
     suspend fun toggleVisibility(feed: MdblistHomeFeed, hidden: Boolean) = runCatching {

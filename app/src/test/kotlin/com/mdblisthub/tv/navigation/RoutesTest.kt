@@ -20,7 +20,7 @@ class RoutesTest {
         )
 
         assertEquals(
-            "player/show/1399?season=4&episode=7&select=true&offline=false",
+            "player/show/1399?season=4&episode=7&select=true&offline=false&restart=false",
             Routes.resume(point),
         )
     }
@@ -36,8 +36,16 @@ class RoutesTest {
         )
 
         assertEquals(
-            "player/movie/550?season=-1&episode=-1&select=true&offline=false",
+            "player/movie/550?season=-1&episode=-1&select=true&offline=false&restart=false",
             Routes.resume(point),
+        )
+    }
+
+    @Test
+    fun restartEpisodeSkipsItsSavedPosition() {
+        assertEquals(
+            "player/show/1399?season=2&episode=5&select=false&offline=false&restart=true",
+            Routes.player(MediaType.SHOW, 1399, season = 2, episode = 5, restart = true),
         )
     }
 }

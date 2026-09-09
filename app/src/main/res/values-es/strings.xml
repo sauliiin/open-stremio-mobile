@@ -59,12 +59,14 @@
     <string name="detail_watch">Ver</string>
     <string name="detail_watch_episode">Ver T%1$dE%2$d</string>
     <string name="detail_select_source">Seleccionar fuente</string>
-    <string name="detail_episode_source_hint">Toca para ver detalles · mantén presionado para las fuentes</string>
+    <string name="detail_episode_source_hint">Toca para ver detalles · mantén presionado para las opciones</string>
     <string name="detail_episode_number">Temporada %1$d · Episodio %2$d</string>
     <string name="detail_episode_runtime">%1$d min</string>
     <string name="detail_episode_rating">Calificación %1$.1f</string>
     <string name="detail_episode_no_overview">No hay sinopsis disponible para este episodio.</string>
     <string name="detail_clear_progress">Borrar progreso</string>
+    <string name="detail_abandon_series">Abandonar serie</string>
+    <string name="detail_watch_from_beginning">Ver desde el principio</string>
     <string name="detail_offline">Offline</string>
     <string name="detail_offline_downloading">Offline %1$.1f%%</string>
     <string name="detail_offline_cancel">Cancelar offline</string>
@@ -208,6 +210,8 @@
     <string name="player_subtitles">Subtítulos</string>
     <string name="player_audio">Pista de audio</string>
     <string name="player_audio_short">Audio</string>
+    <string name="player_volume">Volumen</string>
+    <string name="player_brightness">Brillo</string>
     <string name="player_scale_short">Estirar</string>
     <string name="player_cast">Reparto</string>
     <string name="player_no_subtitle">Sin subtítulos</string>
@@ -349,6 +353,7 @@
     <string name="error_mdblist_no_valid_manifests">MDBList no generó ningún manifest de addon válido.</string>
     <string name="error_mdblist_key_required">Ingresa tu clave de API de MDBList.</string>
     <string name="error_mdblist_write_rejected">mdblist respondió %1$d.</string>
+    <string name="error_mdblist_title_not_recognized">MDBList no reconoció ni actualizó esta serie.</string>
     <string name="error_mdblist_session_expired">Sesión expirada.</string>
     <string name="error_google_sign_in_required">Inicia sesión con Google primero.</string>
     <string name="error_google_account_changed_restore">La cuenta de Google cambió durante la restauración.</string>

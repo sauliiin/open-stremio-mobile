@@ -88,6 +88,13 @@ class DetailViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** Per-episode download state used by the episode long-press menu. */
+    val offlineEpisodes: StateFlow<Map<Int, OfflineDownload>> = _season
+        .flatMapLatest { selectedSeason ->
+            OfflineDownloads.observeEpisodes(tmdbId, selectedSeason)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     /**
      * Whole-title membership across all three buckets. A show's "watched"
      * marks the series, the same as the web build — mdblist has no
@@ -113,12 +120,19 @@ class DetailViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** Tracks provider-level following independently from a paused playback session. */
+    val following: StateFlow<Boolean> = graph.homeFeeds.observeUpNextMembership(tmdbId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     /** Which bucket has a write in flight, so its own button disables. */
     private val _pending = MutableStateFlow<Set<LibraryBucket>>(emptySet())
     val pending: StateFlow<Set<LibraryBucket>> = _pending.asStateFlow()
 
     private val _libraryError = MutableStateFlow<AppError?>(null)
     val libraryError: StateFlow<AppError?> = _libraryError.asStateFlow()
+
+    private val _abandoning = MutableStateFlow(false)
+    val abandoning: StateFlow<Boolean> = _abandoning.asStateFlow()
 
     private val _castBio = MutableStateFlow(CastBioState())
     val castBio: StateFlow<CastBioState> = _castBio.asStateFlow()
@@ -151,6 +165,16 @@ class DetailViewModel(
         )
     }
 
+    fun removeOffline(episode: Episode) {
+        OfflineDownloads.remove(
+            graph.appContext,
+            MediaType.SHOW,
+            tmdbId,
+            episode.seasonNumber,
+            episode.episodeNumber,
+        )
+    }
+
     fun toggleWatchlist() = toggleBucket(LibraryBucket.WATCHLIST)
     fun toggleCollection() = toggleBucket(LibraryBucket.COLLECTION)
     fun toggleWatched() = toggleBucket(LibraryBucket.WATCHED)
@@ -173,7 +197,32 @@ class DetailViewModel(
 
     fun clearProgress() {
         val point = resumePoint.value ?: return
-        viewModelScope.launch { graph.playback.clear(point.toTarget()) }
+        viewModelScope.launch {
+            graph.playback.clear(point.toTarget())
+        }
+    }
+
+    fun abandonSeries() {
+        if (type != MediaType.SHOW || _abandoning.value) return
+        val current = detail.value ?: return
+        _libraryError.value = null
+        _abandoning.value = true
+
+        viewModelScope.launch {
+            try {
+                val result = graph.library.abandonSeries(tmdbId, current.imdbId)
+                result.onSuccess {
+                    graph.homeFeeds.dismissFromUpNext(tmdbId, current.imdbId)
+                    graph.playback.clearSeriesProgress(
+                        ScrobbleTarget(MediaType.SHOW, tmdbId, current.imdbId),
+                    )
+                }.onFailure { failure ->
+                    _libraryError.value = (failure as? AppException)?.error ?: AppError.Unexpected
+                }
+            } finally {
+                _abandoning.value = false
+            }
+        }
     }
 
     private fun toggleBucket(bucket: LibraryBucket) {

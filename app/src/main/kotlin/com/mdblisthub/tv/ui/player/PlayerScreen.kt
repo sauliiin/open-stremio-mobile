@@ -1,7 +1,11 @@
 package com.mdblisthub.tv.ui.player
 
+import android.content.Context
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.media.AudioManager
 import android.os.SystemClock
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -47,10 +51,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.isActive
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -107,6 +114,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.mdblisthub.tv.R
+import com.mdblisthub.tv.LocalHostActivity
 import com.mdblisthub.tv.core.data.DataGraph
 import com.mdblisthub.tv.core.model.CastMember
 import com.mdblisthub.tv.core.model.MediaType
@@ -125,9 +133,12 @@ import com.mdblisthub.tv.ui.component.HubButton
 import com.mdblisthub.tv.ui.hubViewModel
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 
 private const val OSD_TIMEOUT_MS = 4_000L
+private const val EDGE_GESTURE_WIDTH_FRACTION = 0.30f
+private const val MIN_WINDOW_BRIGHTNESS = 0.01f
 
 /**
  * Caption metrics. The line height is ~1.35x the glyph size — roughly what
@@ -209,12 +220,37 @@ fun PlayerScreen(
     episode: Int?,
     manualSelect: Boolean = false,
     downloadOffline: Boolean = false,
+    startFromBeginning: Boolean = false,
     onBack: () -> Unit,
     onOpenAddons: () -> Unit,
 ) {
     val appContext = LocalContext.current.applicationContext
+    val hostActivity = LocalHostActivity.current
+    val audioManager = remember(appContext) {
+        appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+
+    // Playback is the app's full-screen destination. Restrict it to the two
+    // landscape sensor orientations, then hand orientation control back to
+    // Android as soon as the player route leaves the composition.
+    DisposableEffect(hostActivity) {
+        val previousOrientation = hostActivity?.requestedOrientation
+            ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        val previousBrightness = hostActivity?.window?.attributes?.screenBrightness
+        hostActivity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
+        onDispose {
+            hostActivity?.requestedOrientation = previousOrientation
+            if (previousBrightness != null) {
+                val attributes = hostActivity.window.attributes
+                attributes.screenBrightness = previousBrightness
+                hostActivity.window.attributes = attributes
+            }
+        }
+    }
+
     val viewModel = hubViewModel(
-        key = "player-$type-$tmdbId-$season-$episode-$manualSelect-$downloadOffline",
+        key = "player-$type-$tmdbId-$season-$episode-$manualSelect-$downloadOffline-$startFromBeginning",
     ) {
         PlayerViewModel(
             graph,
@@ -225,6 +261,7 @@ fun PlayerScreen(
             episode,
             manualSelect,
             downloadOffline,
+            startFromBeginning,
         )
     }
 
@@ -274,6 +311,8 @@ fun PlayerScreen(
     var subtitleSyncOpen by remember { mutableStateOf(false) }
     var audioPickerOpen by remember { mutableStateOf(false) }
     var castRailOpen by remember { mutableStateOf(false) }
+    var edgeAdjustment by remember { mutableStateOf<EdgeAdjustment?>(null) }
+    var edgeAdjustmentVersion by remember { mutableIntStateOf(0) }
     val overlayOpen = subtitlePickerOpen || subtitleSyncOpen || audioPickerOpen
 
     /**
@@ -299,6 +338,13 @@ fun PlayerScreen(
     // Paused: the OSD has nothing to hide behind, so it stays up.
     // Buffering no longer forces the OSD visible to prevent flashing during micro-stutters.
     val osdVisible = !osdExpired || playback.phase == PlaybackPhase.PAUSED || castRailOpen
+
+    LaunchedEffect(edgeAdjustmentVersion) {
+        if (edgeAdjustmentVersion == 0) return@LaunchedEffect
+        val version = edgeAdjustmentVersion
+        delay(900)
+        if (edgeAdjustmentVersion == version) edgeAdjustment = null
+    }
 
     LaunchedEffect(osdVisibleUntil) {
         osdExpired = false
@@ -460,6 +506,77 @@ fun PlayerScreen(
                     // Any other key only wakes the OSD, which is what a remote
                     // user expects from pressing "something".
                     else -> false
+                }
+            }
+            // A vertical drag starting in the left 30% controls this window's
+            // brightness; the mirrored gesture on the right controls media
+            // volume. Nothing is consumed until the movement is clearly
+            // vertical, so ordinary taps still wake/hide the OSD and the
+            // timeline keeps ownership of its own horizontal drag.
+            .pointerInput(playback.canShowVideo, overlayOpen, hostActivity) {
+                if (!playback.canShowVideo || overlayOpen) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val control = edgeControlAt(down.position.x, size.width.toFloat())
+                        ?: return@awaitEachGesture
+                    val maxVolume = audioManager
+                        .getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        .coerceAtLeast(1)
+                    val initialValue = when (control) {
+                        PlayerEdgeControl.VOLUME -> audioManager
+                            .getStreamVolume(AudioManager.STREAM_MUSIC)
+                            .toFloat() / maxVolume
+                        PlayerEdgeControl.BRIGHTNESS -> {
+                            val windowValue = hostActivity?.window?.attributes?.screenBrightness
+                                ?.takeIf { it >= 0f }
+                            windowValue ?: (
+                                Settings.System.getInt(
+                                    appContext.contentResolver,
+                                    Settings.System.SCREEN_BRIGHTNESS,
+                                    128,
+                                ) / 255f
+                            )
+                        }
+                    }
+                    var adjusting = false
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (adjusting) change.consume()
+                            break
+                        }
+
+                        val verticalTravel = down.position.y - change.position.y
+                        val horizontalTravel = change.position.x - down.position.x
+                        if (!adjusting) {
+                            val touchSlop = viewConfiguration.touchSlop
+                            if (abs(verticalTravel) < touchSlop && abs(horizontalTravel) < touchSlop) {
+                                continue
+                            }
+                            if (abs(verticalTravel) <= abs(horizontalTravel)) break
+                            adjusting = true
+                        }
+
+                        val value = (initialValue + verticalTravel / size.height.toFloat())
+                            .coerceIn(0f, 1f)
+                        when (control) {
+                            PlayerEdgeControl.VOLUME -> audioManager.setStreamVolume(
+                                AudioManager.STREAM_MUSIC,
+                                (value * maxVolume).roundToInt(),
+                                0,
+                            )
+                            PlayerEdgeControl.BRIGHTNESS -> hostActivity?.let { activity ->
+                                val attributes = activity.window.attributes
+                                attributes.screenBrightness = value.coerceAtLeast(MIN_WINDOW_BRIGHTNESS)
+                                activity.window.attributes = attributes
+                            }
+                        }
+                        edgeAdjustment = EdgeAdjustment(control, (value * 100f).roundToInt())
+                        edgeAdjustmentVersion++
+                        change.consume()
+                    }
                 }
             }
             // A remote has an "any key wakes the OSD" gesture built in; a
@@ -626,6 +743,13 @@ fun PlayerScreen(
             )
         }
 
+        edgeAdjustment?.let { adjustment ->
+            PlayerEdgeAdjustmentOverlay(
+                adjustment = adjustment,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
         if (osdOnScreen) {
             PlayerTitlePlate(
                 title = ui.title,
@@ -732,6 +856,65 @@ fun PlayerScreen(
                 wantsPlayFocus = true
                 poke()
             },
+        )
+    }
+}
+
+internal enum class PlayerEdgeControl { BRIGHTNESS, VOLUME }
+
+internal data class EdgeAdjustment(
+    val control: PlayerEdgeControl,
+    val percent: Int,
+)
+
+/** Resolves an edge gesture without letting the two hit regions overlap. */
+internal fun edgeControlAt(x: Float, width: Float): PlayerEdgeControl? {
+    if (width <= 0f) return null
+    val position = (x / width).coerceIn(0f, 1f)
+    return when {
+        position <= EDGE_GESTURE_WIDTH_FRACTION -> PlayerEdgeControl.BRIGHTNESS
+        position >= 1f - EDGE_GESTURE_WIDTH_FRACTION -> PlayerEdgeControl.VOLUME
+        else -> null
+    }
+}
+
+@Composable
+private fun PlayerEdgeAdjustmentOverlay(
+    adjustment: EdgeAdjustment,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(HubColors.Background.copy(alpha = 0.84f))
+            .border(1.dp, HubColors.Border, RoundedCornerShape(16.dp))
+            .padding(horizontal = 28.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = when (adjustment.control) {
+                PlayerEdgeControl.BRIGHTNESS -> Icons.Default.Brightness6
+                PlayerEdgeControl.VOLUME -> Icons.AutoMirrored.Filled.VolumeUp
+            },
+            contentDescription = null,
+            tint = HubColors.AccentSoft,
+            modifier = Modifier.size(36.dp),
+        )
+        Text(
+            text = stringResource(
+                when (adjustment.control) {
+                    PlayerEdgeControl.BRIGHTNESS -> R.string.player_brightness
+                    PlayerEdgeControl.VOLUME -> R.string.player_volume
+                },
+            ),
+            style = MaterialTheme.typography.titleMedium,
+            color = HubColors.Text,
+        )
+        Text(
+            text = "${adjustment.percent}%",
+            style = MaterialTheme.typography.headlineMedium,
+            color = HubColors.Text,
         )
     }
 }

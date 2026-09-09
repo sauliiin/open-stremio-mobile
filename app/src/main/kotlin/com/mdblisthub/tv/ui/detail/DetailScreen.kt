@@ -52,8 +52,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.runtime.Composable
@@ -75,8 +77,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,6 +114,7 @@ import com.mdblisthub.tv.core.ui.component.MediaRow
 import com.mdblisthub.tv.core.ui.component.PosterActionOverlayHost
 import com.mdblisthub.tv.core.ui.component.PosterOverlayAction
 import com.mdblisthub.tv.core.ui.component.PosterOverlayRequest
+import com.mdblisthub.tv.core.ui.component.PosterCardAnchor
 import com.mdblisthub.tv.core.ui.component.RatingBadges
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubDimens
@@ -131,6 +137,7 @@ fun DetailScreen(
     initialBackdropUrl: String? = null,
     onBack: () -> Unit,
     onPlay: (season: Int?, episode: Int?) -> Unit,
+    onPlayFromBeginning: (season: Int?, episode: Int?) -> Unit,
     onSelectSource: (season: Int?, episode: Int?) -> Unit,
     onOffline: (season: Int?, episode: Int?) -> Unit,
     onOpenTitle: (MediaItem) -> Unit,
@@ -152,16 +159,21 @@ fun DetailScreen(
     val libraryProvider by graph.uiPreferences.libraryProvider
         .collectAsStateWithLifecycle(initialValue = LibraryProvider.MDBLIST)
     val resumePoint by viewModel.resumePoint.collectAsStateWithLifecycle()
+    val following by viewModel.following.collectAsStateWithLifecycle()
     val pending by viewModel.pending.collectAsStateWithLifecycle()
+    val abandoning by viewModel.abandoning.collectAsStateWithLifecycle()
     val libraryError by viewModel.libraryError.collectAsStateWithLifecycle()
     val castBio by viewModel.castBio.collectAsStateWithLifecycle()
     val offline by viewModel.offline.collectAsStateWithLifecycle()
+    val offlineEpisodes by viewModel.offlineEpisodes.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val optionPlayLabel = stringResource(R.string.media_options_play)
     val optionSourceLabel = stringResource(R.string.media_options_select_source)
     val optionInfoLabel = stringResource(R.string.media_options_info)
     val optionWatchedLabel = stringResource(R.string.media_options_mark_watched)
     val optionUnwatchedLabel = stringResource(R.string.media_options_mark_unwatched)
+    val episodeWatchFromBeginningLabel = stringResource(R.string.detail_watch_from_beginning)
+    val episodeOfflineLabel = stringResource(R.string.detail_offline)
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var buttonRowHadFocus by remember { mutableStateOf(false) }
@@ -369,35 +381,36 @@ fun DetailScreen(
                             },
                             modifier = Modifier.fillMaxHeight(),
                         )
-                        val offlineLabel = when (offline?.status) {
-                            null -> stringResource(R.string.detail_offline)
-                            OfflineStatus.DOWNLOADING -> {
-                                val percent = offline?.percentDownloaded?.coerceIn(0f, 100f) ?: 0f
-                                stringResource(R.string.detail_offline_downloading, percent)
-                            }
-                            OfflineStatus.QUEUED -> stringResource(R.string.detail_offline_cancel)
-                            OfflineStatus.REMOVING -> stringResource(R.string.detail_offline_removing)
-                            OfflineStatus.FAILED -> stringResource(R.string.detail_offline_failed)
-                            OfflineStatus.COMPLETED,
-                            OfflineStatus.STOPPED,
-                            -> stringResource(R.string.detail_offline_remove)
-                        }
-                        HubButton(
-                            text = offlineLabel,
-                            enabled = offline?.status != OfflineStatus.REMOVING,
-                            onClick = {
-                                if (offline == null) {
-                                    if (type == MediaType.SHOW) {
-                                        onOffline(season, firstEpisode)
-                                    } else {
-                                        onOffline(null, null)
-                                    }
-                                } else {
-                                    viewModel.removeOffline()
+                        // Series downloads belong to concrete episodes and are
+                        // exposed on each episode's long-press menu below. A
+                        // film has no episode row, so it keeps this action.
+                        if (type == MediaType.MOVIE) {
+                            val offlineLabel = when (offline?.status) {
+                                null -> stringResource(R.string.detail_offline)
+                                OfflineStatus.DOWNLOADING -> {
+                                    val percent = offline?.percentDownloaded?.coerceIn(0f, 100f) ?: 0f
+                                    stringResource(R.string.detail_offline_downloading, percent)
                                 }
-                            },
-                            modifier = Modifier.fillMaxHeight(),
-                        )
+                                OfflineStatus.QUEUED -> stringResource(R.string.detail_offline_cancel)
+                                OfflineStatus.REMOVING -> stringResource(R.string.detail_offline_removing)
+                                OfflineStatus.FAILED -> stringResource(R.string.detail_offline_failed)
+                                OfflineStatus.COMPLETED,
+                                OfflineStatus.STOPPED,
+                                -> stringResource(R.string.detail_offline_remove)
+                            }
+                            HubButton(
+                                text = offlineLabel,
+                                enabled = offline?.status != OfflineStatus.REMOVING,
+                                onClick = {
+                                    if (offline == null) {
+                                        onOffline(null, null)
+                                    } else {
+                                        viewModel.removeOffline()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxHeight(),
+                            )
+                        }
                         if (current.trailerKey != null || current.imdbId != null) {
                             HubButton(
                                 text = stringResource(R.string.detail_trailer),
@@ -425,10 +438,24 @@ fun DetailScreen(
                             onClick = viewModel::toggleWatched,
                             modifier = Modifier.fillMaxHeight(),
                         )
-                        if (resumePoint != null) {
+                        if (
+                            (type == MediaType.SHOW && (following || resumePoint != null)) ||
+                            (type == MediaType.MOVIE && resumePoint != null)
+                        ) {
                             HubButton(
-                                text = stringResource(R.string.detail_clear_progress),
-                                onClick = viewModel::clearProgress,
+                                text = stringResource(
+                                    if (type == MediaType.SHOW) {
+                                        R.string.detail_abandon_series
+                                    } else {
+                                        R.string.detail_clear_progress
+                                    },
+                                ),
+                                enabled = type != MediaType.SHOW || !abandoning,
+                                onClick = if (type == MediaType.SHOW) {
+                                    viewModel::abandonSeries
+                                } else {
+                                    viewModel::clearProgress
+                                },
                                 modifier = Modifier.fillMaxHeight(),
                             )
                         }
@@ -484,12 +511,44 @@ fun DetailScreen(
                     EpisodeRow(
                         episodes = episodes,
                         watchedEpisodes = watchedEpisodes,
+                        offlineEpisodes = offlineEpisodes,
                         dimUnwatched = dimUnwatchedEpisodes,
                         showTmdbId = tmdbId,
                         appLanguage = appLanguage,
                         onOpenDetails = { episodeDetails = it },
-                        onSelectSource = { ep ->
-                            onSelectSource(ep.seasonNumber, ep.episodeNumber)
+                        onOpenOptions = { ep, anchor ->
+                            val episodeOffline = offlineEpisodes[ep.episodeNumber]
+                            PosterActionOverlayHost.show(
+                                PosterOverlayRequest(
+                                    anchor = anchor,
+                                    title = ep.name,
+                                    subtitle = "S${ep.seasonNumber}E${ep.episodeNumber}",
+                                    actions = listOf(
+                                        PosterOverlayAction(
+                                            episodeWatchFromBeginningLabel,
+                                            Icons.Default.Replay,
+                                        ) {
+                                            onPlayFromBeginning(ep.seasonNumber, ep.episodeNumber)
+                                        },
+                                        PosterOverlayAction(
+                                            optionSourceLabel,
+                                            Icons.Default.Tune,
+                                        ) {
+                                            onSelectSource(ep.seasonNumber, ep.episodeNumber)
+                                        },
+                                        PosterOverlayAction(
+                                            episodeOfflineLabel,
+                                            Icons.Default.Download,
+                                        ) {
+                                            if (episodeOffline == null) {
+                                                onOffline(ep.seasonNumber, ep.episodeNumber)
+                                            } else {
+                                                viewModel.removeOffline(ep)
+                                            }
+                                        },
+                                    ),
+                                ),
+                            )
                         },
                     )
                 }
@@ -709,11 +768,12 @@ private fun EpisodeDetailsDialog(
 private fun EpisodeRow(
     episodes: List<Episode>,
     watchedEpisodes: Set<String>,
+    offlineEpisodes: Map<Int, com.mdblisthub.tv.player.OfflineDownload>,
     dimUnwatched: Boolean,
     showTmdbId: Int,
     appLanguage: String,
     onOpenDetails: (Episode) -> Unit,
-    onSelectSource: (Episode) -> Unit,
+    onOpenOptions: (Episode, PosterCardAnchor) -> Unit,
 ) {
     if (episodes.isEmpty()) return
 
@@ -737,6 +797,7 @@ private fun EpisodeRow(
                 // the cast row directly below this one included.
                 val interaction = remember { MutableInteractionSource() }
                 val focused by interaction.collectIsFocusedAsState()
+                var stillBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
 
                 val borderWidth by animateDpAsState(
                     if (focused) 3.dp else 0.dp,
@@ -796,21 +857,35 @@ private fun EpisodeRow(
                             interactionSource = interaction,
                             indication = null,
                             onClick = { onOpenDetails(episode) },
-                            onLongClick = { onSelectSource(episode) },
+                            onLongClick = {
+                                onOpenOptions(
+                                    episode,
+                                    PosterCardAnchor(
+                                        boundsInRoot = stillBoundsInRoot,
+                                        cornerRadius = 8.dp,
+                                        imageUrl = episode.stillUrl,
+                                    ),
+                                )
+                            },
                         )
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Box {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(132.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(HubColors.SurfaceStrong)
+                            .onGloballyPositioned { stillBoundsInRoot = it.boundsInRoot() },
+                    ) {
                         episode.stillUrl?.let {
                         AsyncImage(
                             model = it,
                             contentDescription = episode.name,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(132.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                                .fillMaxSize()
                                 .then(
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                                         Modifier.blur(stillBlurRadius)
@@ -859,6 +934,26 @@ private fun EpisodeRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    offlineEpisodes[episode.episodeNumber]?.let { download ->
+                        Text(
+                            text = when (download.status) {
+                                OfflineStatus.DOWNLOADING -> stringResource(
+                                    R.string.detail_offline_downloading,
+                                    download.percentDownloaded.coerceIn(0f, 100f),
+                                )
+                                OfflineStatus.QUEUED -> stringResource(R.string.detail_offline_cancel)
+                                OfflineStatus.REMOVING -> stringResource(R.string.detail_offline_removing)
+                                OfflineStatus.FAILED -> stringResource(R.string.detail_offline_failed)
+                                OfflineStatus.COMPLETED,
+                                OfflineStatus.STOPPED,
+                                -> stringResource(R.string.detail_offline_remove)
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = HubColors.AccentSoft,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }

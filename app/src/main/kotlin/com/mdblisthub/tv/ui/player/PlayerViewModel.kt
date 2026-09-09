@@ -79,6 +79,8 @@ class PlayerViewModel(
     private val manualSelect: Boolean = false,
     /** Selects a source for a durable download instead of opening it. */
     private val downloadOffline: Boolean = false,
+    /** Ignores both provider progress and the exact local playback hint. */
+    private val startFromBeginning: Boolean = false,
 ) : ViewModel() {
 
     private val appContext = context.applicationContext
@@ -178,12 +180,12 @@ class PlayerViewModel(
                 _ui.update { it.copy(searching = false) }
                 controller.playOffline(
                     offline,
-                    graph.playback.resumeFor(scrobbleTarget),
+                    if (startFromBeginning) null else graph.playback.resumeFor(scrobbleTarget),
                     expectedRuntimeMinutes(cachedDetail, card),
                     // Room, not the network — the note this app left itself
                     // last time. Null on a first watch, and everything
                     // downstream works without one.
-                    hint = graph.playback.hintFor(scrobbleTarget),
+                    hint = if (startFromBeginning) null else graph.playback.hintFor(scrobbleTarget),
                 )
                 return
             }
@@ -203,8 +205,8 @@ class PlayerViewModel(
             return
         }
 
-        val resumeAt = graph.playback.resumeFor(scrobbleTarget)
-        val hint = graph.playback.hintFor(scrobbleTarget)
+        val resumeAt = if (startFromBeginning) null else graph.playback.resumeFor(scrobbleTarget)
+        val hint = if (startFromBeginning) null else graph.playback.hintFor(scrobbleTarget)
         val runtimeMinutes = expectedRuntimeMinutes(cachedDetail, card)
 
         if (downloadOffline) {

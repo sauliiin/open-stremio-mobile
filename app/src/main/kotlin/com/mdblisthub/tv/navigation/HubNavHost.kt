@@ -64,7 +64,7 @@ object Routes {
     const val ADDONS = "addons"
     const val SETTINGS = "settings"
     const val DETAIL = "detail/{type}/{tmdbId}"
-    const val PLAYER = "player/{type}/{tmdbId}?season={season}&episode={episode}&select={select}&offline={offline}"
+    const val PLAYER = "player/{type}/{tmdbId}?season={season}&episode={episode}&select={select}&offline={offline}&restart={restart}"
 
     fun detail(type: MediaType, tmdbId: Int) = "detail/${type.mdblist}/$tmdbId"
 
@@ -75,8 +75,9 @@ object Routes {
         episode: Int? = null,
         select: Boolean = false,
         offline: Boolean = false,
+        restart: Boolean = false,
     ) = "player/${type.mdblist}/$tmdbId?season=${season ?: -1}&episode=${episode ?: -1}" +
-        "&select=$select&offline=$offline"
+        "&select=$select&offline=$offline&restart=$restart"
 
     /** Resume the exact movie or episode and let the viewer choose its source first. */
     fun resume(point: ResumePoint) = player(
@@ -322,6 +323,11 @@ fun HubNavHost(graph: DataGraph) {
                 onSelectSource = { season, episode ->
                     navController.navigate(Routes.player(type, tmdbId, season, episode, select = true))
                 },
+                onPlayFromBeginning = { season, episode ->
+                    navController.navigate(
+                        Routes.player(type, tmdbId, season, episode, restart = true),
+                    )
+                },
                 onOffline = { season, episode ->
                     navController.navigate(
                         Routes.player(type, tmdbId, season, episode, offline = true),
@@ -348,6 +354,7 @@ fun HubNavHost(graph: DataGraph) {
                 navArgument("episode") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("select") { type = NavType.BoolType; defaultValue = false },
                 navArgument("offline") { type = NavType.BoolType; defaultValue = false },
+                navArgument("restart") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { entry ->
             val args = entry.arguments
@@ -359,6 +366,7 @@ fun HubNavHost(graph: DataGraph) {
                 episode = args?.getInt("episode")?.takeIf { it > 0 },
                 manualSelect = args?.getBoolean("select") ?: false,
                 downloadOffline = args?.getBoolean("offline") ?: false,
+                startFromBeginning = args?.getBoolean("restart") ?: false,
                 onBack = { navController.popBackStack() },
                 onOpenAddons = { navController.navigate(Routes.ADDONS) },
             )

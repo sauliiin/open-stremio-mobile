@@ -59,12 +59,14 @@
     <string name="detail_watch">Watch</string>
     <string name="detail_watch_episode">Watch S%1$dE%2$d</string>
     <string name="detail_select_source">Select Source</string>
-    <string name="detail_episode_source_hint">Tap for details · hold for sources</string>
+    <string name="detail_episode_source_hint">Tap for details · hold for options</string>
     <string name="detail_episode_number">Season %1$d · Episode %2$d</string>
     <string name="detail_episode_runtime">%1$d min</string>
     <string name="detail_episode_rating">Rating %1$.1f</string>
     <string name="detail_episode_no_overview">No synopsis is available for this episode.</string>
     <string name="detail_clear_progress">Clear Progress</string>
+    <string name="detail_abandon_series">Abandon Series</string>
+    <string name="detail_watch_from_beginning">Watch from the beginning</string>
     <string name="detail_offline">Offline</string>
     <string name="detail_offline_downloading">Offline %1$.1f%%</string>
     <string name="detail_offline_cancel">Cancel offline</string>
@@ -208,6 +210,8 @@
     <string name="player_subtitles">Subtitles</string>
     <string name="player_audio">Audio track</string>
     <string name="player_audio_short">Audio</string>
+    <string name="player_volume">Volume</string>
+    <string name="player_brightness">Brightness</string>
     <string name="player_scale_short">Stretch</string>
     <string name="player_cast">Cast</string>
     <string name="player_no_subtitle">No subtitles</string>
@@ -349,6 +353,7 @@
     <string name="error_mdblist_no_valid_manifests">MDBList did not generate any valid addon manifest.</string>
     <string name="error_mdblist_key_required">Enter your MDBList API key.</string>
     <string name="error_mdblist_write_rejected">mdblist responded %1$d.</string>
+    <string name="error_mdblist_title_not_recognized">MDBList did not recognize or update this series.</string>
     <string name="error_mdblist_session_expired">Session expired.</string>
     <string name="error_google_sign_in_required">Sign in with Google first.</string>
     <string name="error_google_account_changed_restore">The Google account changed during restore.</string>

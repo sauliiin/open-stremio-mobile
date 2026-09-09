@@ -169,6 +169,22 @@ object OfflineDownloads : DownloadManager.Listener {
         return _downloads.map { it[id] }.distinctUntilChanged()
     }
 
+    /** Offline state for the episode cards in one season. */
+    fun observeEpisodes(showTmdbId: Int, season: Int): Flow<Map<Int, OfflineDownload>> =
+        _downloads.map { downloads ->
+            downloads.values
+                .asSequence()
+                .filter { download ->
+                    download.metadata.type == MediaType.SHOW &&
+                        download.metadata.tmdbId == showTmdbId &&
+                        download.metadata.season == season
+                }
+                .mapNotNull { download ->
+                    download.metadata.episode?.let { episode -> episode to download }
+                }
+                .toMap()
+        }.distinctUntilChanged()
+
     /** Reads the durable index, so a cold player never races manager initialisation. */
     suspend fun completed(
         type: MediaType,

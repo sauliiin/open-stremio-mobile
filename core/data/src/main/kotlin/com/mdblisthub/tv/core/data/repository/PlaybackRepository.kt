@@ -150,6 +150,44 @@ class PlaybackRepository(
     }
 
     /**
+     * Removes every paused episode for a series from the selected provider.
+     *
+     * Trakt and Simkl address each paused playback by its provider id, while
+     * MDBList clears the episode target itself. Keeping the fan-out here makes
+     * clearing a series' paused sessions one provider-neutral operation.
+     * Local rows and hints are removed even if one remote request fails; a
+     * later refresh will reconcile any provider entry that survived.
+     */
+    suspend fun clearSeriesProgress(target: ScrobbleTarget): Result<Unit> {
+        require(target.type == MediaType.SHOW) { "Only a series can have series progress cleared" }
+
+        val rows = dao.resumePointsForTitle(
+            type = target.type.mdblist,
+            tmdbId = target.tmdbId,
+            imdbId = target.imdbId,
+        )
+        val playbackSource = source()
+        var firstFailure: Throwable? = null
+
+        rows.forEach { row ->
+            val episodeTarget = ScrobbleTarget(
+                type = MediaType.SHOW,
+                tmdbId = row.tmdbId ?: target.tmdbId,
+                imdbId = row.imdbId ?: target.imdbId,
+                season = row.season,
+                episode = row.episode,
+            )
+            runCatching { playbackSource.clear(episodeTarget, row.playbackId) }
+                .onFailure { if (firstFailure == null) firstFailure = it }
+
+            dao.deleteResumePoint(row.key)
+            dao.deletePlaybackHint(episodeTarget.localKey())
+        }
+
+        return firstFailure?.let(Result.Companion::failure) ?: Result.success(Unit)
+    }
+
+    /**
      * Forgets sessions read from the previous provider. Called when the
      * library setting changes, for the same reason `LibraryRepository` clears
      * its buckets: a row from one account has no meaning under another.
