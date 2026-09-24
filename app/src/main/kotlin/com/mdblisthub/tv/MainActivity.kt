@@ -31,6 +31,10 @@ import com.mdblisthub.tv.ui.intro.IntroScreen
 import com.mdblisthub.tv.update.AppUpdateManager
 import com.mdblisthub.tv.update.AppUpdateOverlay
 import com.mdblisthub.tv.ui.player.PlaybackCompletionNotifier
+import com.mdblisthub.tv.ui.player.PipHost
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
 /**
@@ -40,9 +44,19 @@ import java.util.Locale
  * the whole interface is one activity and a Compose graph — which also means
  * the player never has to hand state across an activity boundary.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), PipHost {
 
     private lateinit var appUpdateManager: AppUpdateManager
+
+    private val _inPipMode = MutableStateFlow(false)
+    override val inPipMode: StateFlow<Boolean> = _inPipMode.asStateFlow()
+
+    /**
+     * Only the player sets this, and only while it is on screen — see
+     * [PipHost.onLeaveHint]. Leaving any other screen must keep behaving the
+     * way it always has.
+     */
+    override var onLeaveHint: (() -> Boolean)? = null
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
@@ -130,6 +144,35 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideStatusBar()
+    }
+
+    /**
+     * The last moment before the home or recents gesture completes.
+     *
+     * Android 12 and later enter the floating window on their own from the
+     * params the player keeps current, and never call this. Below that there
+     * is no such consent to give, and this callback is the only notice the
+     * system offers — so the mode has to be entered from inside it, while the
+     * activity is still foreground enough to be allowed to.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        onLeaveHint?.invoke()
+    }
+
+    /**
+     * Entering or leaving the floating window.
+     *
+     * Not a recreation — the manifest's `configChanges` see to that — so this
+     * is purely news for the composition: at a couple of hundred dp there is
+     * room for the picture and nothing the app draws on top of it.
+     */
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        _inPipMode.value = isInPictureInPictureMode
     }
 
     override fun onDestroy() {

@@ -41,10 +41,19 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.MdblistHub">
 
+        <!--
+            `supportsPictureInPicture` is what makes the floating window
+            possible at all; the `configChanges` list above is what makes it
+            survivable. Entering and leaving the mode is a configuration
+            change, and without those declared Android would recreate this
+            activity around the transition — tearing down the player and its
+            buffer to shrink the window it is playing in.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density"
             android:theme="@style/Theme.MdblistHub">
 

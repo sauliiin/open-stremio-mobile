@@ -80,9 +80,12 @@ internal class MediaPrefetcher(
     @Volatile
     private var positionMs = 0L
 
-    /** True while the player's own buffer is too thin to share bandwidth. */
-    @Volatile
-    private var starving = true
+    /**
+     * Who owns the link, and when a download already in flight has to be given
+     * up — see [PrefetchPolicy], where the rule lives so it can be tested as a
+     * series rather than inferred from a film that did or did not stutter.
+     */
+    private val policy = PrefetchPolicy(STARVING_BUFFER_MS)
 
     /**
      * Cancelled from the main thread on a seek, so a chunk fetched for a
@@ -114,10 +117,23 @@ internal class MediaPrefetcher(
 
     fun onPosition(positionMs: Long, playerBufferedMs: Long, playerLoading: Boolean) {
         this.positionMs = positionMs
-        // Both halves are load-bearing; see [STARVING_BUFFER_MS] for why the
-        // threshold on its own was not enough to tell a starving player from a
-        // satisfied one.
-        starving = playerLoading && playerBufferedMs < STARVING_BUFFER_MS
+        apply(policy.onSample(playerLoading, playerBufferedMs))
+    }
+
+    /**
+     * The player's loader started or stopped wanting bytes.
+     *
+     * Pushed from `onIsLoadingChanged` rather than read off the position
+     * ticker, which runs every few seconds — an age to spend sharing a link
+     * the player has already run out of road on.
+     */
+    fun onLoadingChanged(playerLoading: Boolean) {
+        apply(policy.onLoadingChanged(playerLoading))
+    }
+
+    /** The picture has stopped — `STATE_BUFFERING`. Everything goes to the player. */
+    fun onPlayerStalled() {
+        apply(policy.onPlayerStalled())
     }
 
     /**
@@ -125,7 +141,11 @@ internal class MediaPrefetcher(
      * recomputes the window from wherever the viewer just landed.
      */
     fun invalidate() {
-        writer?.cancel()
+        apply(policy.onSeek())
+    }
+
+    private fun apply(effect: PrefetchPolicy.Effect) {
+        if (effect == PrefetchPolicy.Effect.CANCEL_IN_FLIGHT) writer?.cancel()
     }
 
     fun stop() {
@@ -134,7 +154,7 @@ internal class MediaPrefetcher(
         job?.cancel()
         job = null
         activeKey = null
-        starving = true
+        policy.reset()
     }
 
     private suspend fun run(uri: Uri, key: String, durationMs: Long) {
@@ -159,7 +179,7 @@ internal class MediaPrefetcher(
             // from — and guessing a length would place every range request
             // wrong for the rest of the film.
             val contentLength = ContentMetadata.getContentLength(cache.getContentMetadata(key))
-            if (contentLength <= 0 || starving) {
+            if (contentLength <= 0 || !policy.mayStartChunk) {
                 delay(IDLE_POLL_MS)
                 continue
             }
@@ -313,7 +333,7 @@ internal class MediaPrefetcher(
          * loading is satisfied, however few seconds that turned out to buy, and
          * the bandwidth left over is genuinely spare.
          */
-        const val STARVING_BUFFER_MS = 15_000L
+        internal const val STARVING_BUFFER_MS = 15_000L
 
         /** Long enough that a full window costs almost nothing to re-check. */
         const val IDLE_POLL_MS = 2_000L

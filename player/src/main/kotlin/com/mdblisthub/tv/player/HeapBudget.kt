@@ -139,8 +139,26 @@ internal object HeapBudget {
     /** The ceiling on rewind-for-free, once the share above allows that much. */
     const val MAX_BACK_BUFFER_MS = 10_000L
 
-    /** Enough to keep the picture moving while the pressure passes. */
-    const val MIN_BACK_BUFFER_MS = 2_000L
+    /**
+     * Forward buffer reserved before any of the budget is shared out.
+     *
+     * The share above is taken from what is left *after* this, not off the
+     * top, and that is the whole difference. The pot is not all discretionary:
+     * playback does not resume after a rebuffer until
+     * [bufferForPlaybackAfterRebufferMs] is buffered, so that much of every
+     * budget — and a working cushion above it — is spoken for before anything
+     * is divided. Twenty percent of the whole is how a device holding
+     * twenty-five seconds of a high-bitrate remux ended up handing five of
+     * them to film already watched, leaving barely more than the resume
+     * threshold in front of the playhead.
+     *
+     * Nothing is lost on the devices this excludes. Rewinding reads from
+     * [MediaCache], which is on disk, costs no heap and holds minutes rather
+     * than seconds; the RAM back buffer only ever saved the difference between
+     * a disk read and a memory one, and a disk read is not what makes a
+     * picture stop.
+     */
+    private const val RESERVED_FORWARD_MS = 20_000L
 
     /**
      * Used only until real throughput is observed — see [AdaptiveLoadControl].
@@ -286,11 +304,64 @@ internal object HeapBudget {
 
     /**
      * How much back buffer [targetBytes] affords at the given throughput,
-     * clamped so it is never the reason the forward buffer runs dry.
+     * taken from the surplus alone so it can never be the reason the forward
+     * buffer runs dry.
      */
     fun backBufferMs(targetBytes: Int, bytesPerSecond: Long): Long {
         val usable = bytesPerSecond.coerceAtLeast(1L)
-        val affordableMs = (targetBytes * BACK_BUFFER_SHARE / usable * 1000L).toLong()
-        return affordableMs.coerceIn(MIN_BACK_BUFFER_MS, MAX_BACK_BUFFER_MS)
+        // What the whole budget is worth in film at this bitrate, less the
+        // part that is not discretionary — see [RESERVED_FORWARD_MS].
+        val surplusMs = targetBytes * 1_000L / usable - RESERVED_FORWARD_MS
+        if (surplusMs <= 0) return 0L
+        return (surplusMs * BACK_BUFFER_SHARE).toLong().coerceAtMost(MAX_BACK_BUFFER_MS)
+    }
+
+    /**
+     * Share of the byte budget a device may be asked to refill before the
+     * picture comes back.
+     *
+     * A third, so that resuming leaves two thirds of the budget still to fill
+     * — a cushion, rather than a resume straight back onto the edge of the
+     * next stall.
+     */
+    private const val REBUFFER_START_SHARE = 0.33
+
+    /**
+     * The floor on that, and the number to raise first if stutter returns.
+     *
+     * Media3 defaults to 2s. Below about this a resume really does land back
+     * in the stall it just left — but the reason it can be this low at all is
+     * [MediaPrefetcher]: the RAM buffer refills from a cache file at storage
+     * speed rather than from the radio, so "almost nothing in hand" stopped
+     * being true when the deep cushion moved to disk.
+     */
+    const val MIN_REBUFFER_START_MS = 2_500L
+
+    /**
+     * How much buffer this device can actually be asked to rebuild before
+     * playback resumes, given what its budget holds at this bitrate.
+     *
+     * [bufferForPlaybackAfterRebufferMs] answers the question by *device
+     * class* — a constrained box gets 2.5s, everything else 8s. That is a
+     * guess about the hardware, and it cannot see the one thing that decides
+     * whether the number is affordable: the bitrate of the file actually
+     * playing. On a phone whose budget holds sixteen seconds of a 50Mbps
+     * remux, being asked for eight of them is being asked for half the pot,
+     * spent stopped, from a link that has just demonstrated it cannot keep up.
+     * Until it finishes the picture stays frozen, and what ends that freeze is
+     * the viewer pressing skip.
+     *
+     * [ceilingMs] is that per-device number, and this can only ever come in
+     * under it — a device with room for its full cushion keeps it, because the
+     * share below lands past the ceiling and is clamped straight back to it.
+     */
+    fun rebufferStartMs(targetBytes: Int, bytesPerSecond: Long, ceilingMs: Int): Long {
+        val usable = bytesPerSecond.coerceAtLeast(1L)
+        val capacityMs = targetBytes * 1_000L / usable
+        val affordableMs = (capacityMs * REBUFFER_START_SHARE).toLong()
+        return affordableMs.coerceIn(
+            MIN_REBUFFER_START_MS.coerceAtMost(ceilingMs.toLong()),
+            ceilingMs.toLong(),
+        )
     }
 }

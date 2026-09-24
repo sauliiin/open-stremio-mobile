@@ -166,6 +166,22 @@ data class PlaybackState(
      * see `SubtitleMatcher`.
      */
     val activeStream: PlayableStream? = null,
+    /**
+     * The decoded picture's dimensions, or zero until the first frame is
+     * decoded.
+     *
+     * Published for picture-in-picture, which has to be handed an aspect ratio
+     * *before* the window shrinks — Android reshapes the window from the
+     * `PictureInPictureParams` it holds at that moment, and a ratio guessed
+     * from the surface's own measured size would be the ratio of whatever the
+     * player happens to be letterboxed into rather than of the film.
+     *
+     * Deliberately the raw values rather than a computed ratio: what counts as
+     * a legal ratio is Android's rule, not the player's, and clamping to it
+     * belongs where that rule is enforced.
+     */
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
 ) {
     val isPlaying: Boolean get() = phase == PlaybackPhase.PLAYING
     val canShowVideo: Boolean

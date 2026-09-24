@@ -17,10 +17,14 @@ android {
         // "mdblist_hub.apk.S84" client, same signing certificate, distinct
         // package so both builds install side by side without colliding.
         applicationId = "com.openstream.tv"
+        // Picture-in-picture is enforced by the platform, not by this app:
+        // whether an aspect ratio is legal and whether a broadcast reaches a
+        // non-exported receiver are both answers only a real device gives.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 42
-        versionName = "1.1.20"
+        versionCode = 45
+        versionName = "1.1.23"
 
         // x86 (32-bit) is back on the list deliberately: the emulator this
         // app is tested on reports exactly that ABI, and without a native
@@ -112,6 +116,9 @@ dependencies {
 
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 
     // Where the profile comes from. `:baselineprofile` builds nothing that
     // ships; this wiring is what makes its output land in the release APK.

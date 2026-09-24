@@ -50,4 +50,8 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.androidx.core.ktx)
     implementation(libs.coroutines.android)
+
+    // The stall and prefetch rules are decisions over a *series* of polls,
+    // which is precisely what cannot be checked by watching a film play.
+    testImplementation(libs.junit)
 }

@@ -219,6 +219,7 @@
     <string name="player_brightness">Luminosité</string>
     <string name="player_scale_short">Étirer</string>
     <string name="player_cast">Distribution</string>
+    <string name="player_pip">PiP</string>
     <string name="player_no_subtitle">Aucun sous-titre</string>
     <string name="player_subtitle_sync">Synchroniser les sous-titres</string>
     <string name="player_subtitle_sync_disabled">Synchroniser les sous-titres — choisissez d’abord un sous-titre</string>

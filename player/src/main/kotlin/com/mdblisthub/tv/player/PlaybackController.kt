@@ -14,6 +14,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
@@ -193,6 +194,14 @@ class PlaybackController(
      */
     private val allocator = DefaultAllocator(/* trimOnReset = */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE)
 
+    /**
+     * The per-device resume cushion, read once — see
+     * [HeapBudget.bufferForPlaybackAfterRebufferMs]. It is a ceiling here, not
+     * the answer: [AdaptiveLoadControl] lowers it wherever the byte budget
+     * cannot hold that much of the stream actually playing.
+     */
+    private val rebufferCeilingMs = HeapBudget.bufferForPlaybackAfterRebufferMs(appContext)
+
     private val targetBufferBytes = HeapBudget.targetBufferBytes(context.applicationContext)
         // Registered before the player exists, so the first trim notice cannot
         // arrive with nothing listening. Idempotent — one registration per
@@ -254,7 +263,7 @@ class PlaybackController(
                         // `bufferForPlaybackMs` stays at the default so the
                         // *first* frame is still fast.
                         /* bufferForPlaybackAfterRebufferMs = */
-                        HeapBudget.bufferForPlaybackAfterRebufferMs(context.applicationContext),
+                        rebufferCeilingMs,
                     )
                     // `DefaultAllocator` takes its `byte[]` from the *Java*
                     // heap, not native memory, so this is bounded by what the
@@ -272,6 +281,9 @@ class PlaybackController(
                     .build(),
                 allocator = allocator,
                 targetBufferBytes = targetBufferBytes,
+                // The same number the delegate was built with, so the wrapper
+                // knows the ceiling it may come in under but never exceed.
+                rebufferCeilingMs = rebufferCeilingMs,
             ),
         )
         // Without this nothing pauses the film when another app takes the
@@ -1005,17 +1017,37 @@ class PlaybackController(
         when (playbackState) {
             Player.STATE_READY -> onReady()
             Player.STATE_ENDED -> onEnded()
-            Player.STATE_BUFFERING -> _state.update {
-                // A buffer stall mid-playback is worth showing; one during the
-                // cascade is not, since the veil is already up.
-                if (it.phase == PlaybackPhase.RESOLVING || it.phase == PlaybackPhase.SELECTING) {
-                    it
-                } else {
-                    it.copy(phase = PlaybackPhase.BUFFERING)
+            Player.STATE_BUFFERING -> {
+                // Before the state is even published. The picture has stopped,
+                // so every byte the link can deliver belongs to the player —
+                // and the second HTTP download this cancels was, on a thin
+                // connection, a real part of why it stopped.
+                prefetcher?.onPlayerStalled()
+                _state.update {
+                    // A buffer stall mid-playback is worth showing; one during
+                    // the cascade is not, since the veil is already up.
+                    if (it.phase == PlaybackPhase.RESOLVING || it.phase == PlaybackPhase.SELECTING) {
+                        it
+                    } else {
+                        it.copy(phase = PlaybackPhase.BUFFERING)
+                    }
                 }
             }
             else -> Unit
         }
+    }
+
+    /**
+     * Who owns the link, answered the moment it changes.
+     *
+     * `LoadControl` decides this several times a minute once the byte budget
+     * is full, and [MediaPrefetcher] used to learn about it only from the
+     * position ticker. Seconds of two downloads sharing one thin connection is
+     * enough to empty a buffer that was never deep to begin with, which is why
+     * this is an event and not a poll.
+     */
+    override fun onIsLoadingChanged(isLoading: Boolean) {
+        prefetcher?.onLoadingChanged(isLoading)
     }
 
     /**
@@ -1142,6 +1174,21 @@ class PlaybackController(
         Log.w(TAG, "reopening committed source, retry $committedRetries")
         _state.update { it.copy(phase = PlaybackPhase.BUFFERING, error = null) }
         open(stream)
+    }
+
+    /**
+     * The first frame's real dimensions, straight from the decoder.
+     *
+     * Read by picture-in-picture, which needs the *film's* shape rather than
+     * the surface's — see [PlaybackState.videoWidth]. `pixelWidthHeightRatio`
+     * is applied here rather than left to the caller, because anamorphic
+     * content (a 1920x1080 frame carrying a 2.39:1 picture) would otherwise
+     * open in a window of the wrong shape with the film letterboxed inside it,
+     * which is the one thing a small floating window has no room for.
+     */
+    override fun onVideoSizeChanged(videoSize: VideoSize) {
+        val width = (videoSize.width * videoSize.pixelWidthHeightRatio).toInt()
+        _state.update { it.copy(videoWidth = width, videoHeight = videoSize.height) }
     }
 
     override fun onTracksChanged(tracks: Tracks) {
@@ -1521,19 +1568,30 @@ class PlaybackController(
      * dead socket and opens a new one, which is the one thing a waiting player
      * will not do for itself.
      *
-     * So this does it instead, and sooner. A frozen [Player.getBufferedPosition]
-     * is the honest signal — a source that is merely slow still advances it,
-     * however slowly, while one that has gone quiet cannot move it at all — and
-     * the repair is [reopenCommitted], the same one the error path already
-     * trusts, at the same position, with the disk cache underneath making the
-     * refill cheap.
+     * So this does it instead, and sooner. [Player.getBufferedPosition] is the
+     * honest signal, but what counts is the *rate* it advances at, not whether
+     * it advances: a mirror that has gone quiet cannot move it at all, and one
+     * that trickles below [STALL_MIN_PROGRESS_MS] cannot reach the cushion
+     * playback needs to resume either. Both are a connection to replace, and
+     * treating the second as healthy — which is what reading this as a
+     * yes-or-no "has it moved" did — is why a film could sit buffering
+     * indefinitely with bytes arriving the whole time.
+     *
+     * The decision itself lives in [StallTracker], where it can be replayed
+     * off-device: no single poll of a trickling source looks any different
+     * from a healthy one, so the bug exists only in the series.
      */
     private fun startStallWatch() {
         stallWatch?.cancel()
         stallWatch = scope.launch {
-            var frozenMs = 0L
+            val tracker = StallTracker(
+                pollMs = STALL_POLL_MS,
+                frozenMs = STALL_FROZEN_MS,
+                suspectMs = STALL_SUSPECT_MS,
+                minProgressMs = STALL_MIN_PROGRESS_MS,
+                softReconnectLimit = SOFT_RECONNECT_LIMIT,
+            )
             var lastBuffered = C.TIME_UNSET
-            var softReconnects = 0
 
             while (isActive) {
                 delay(STALL_POLL_MS)
@@ -1547,51 +1605,34 @@ class PlaybackController(
                     player.playbackState == Player.STATE_BUFFERING
 
                 val buffered = player.bufferedPosition
-                val changed = buffered != lastBuffered
-                val comparable = lastBuffered != C.TIME_UNSET
 
                 // A byte demuxed is a socket alive. This is the only thing that
                 // clears the suspicion `resume` raises, and it has to be
                 // checked whether or not the player is waiting: after a pause
                 // the buffer is full, so the proof arrives while the picture is
                 // playing happily rather than while it is stalled.
-                if (changed && comparable) connectionSuspect = false
-
-                // The ladder is per-stall, not per-film: a source that recovers
-                // and plays on has earned a fresh soft attempt the next time.
-                if (!waiting) softReconnects = 0
-
-                if (!waiting || changed) {
-                    lastBuffered = buffered
-                    frozenMs = 0L
-                    continue
+                if (lastBuffered != C.TIME_UNSET && buffered != lastBuffered) {
+                    connectionSuspect = false
                 }
+                lastBuffered = buffered
 
-                frozenMs += STALL_POLL_MS
-                // A presumed-dead socket is not worth ten seconds of proof —
-                // see [connectionSuspect], which is only ever set when the
-                // connection has already been idle long enough to be dropped.
-                val threshold = if (connectionSuspect) STALL_SUSPECT_MS else STALL_FROZEN_MS
-                if (frozenMs < threshold) continue
+                val action = tracker.onPoll(
+                    waiting = waiting,
+                    bufferedMs = buffered,
+                    suspect = connectionSuspect,
+                    // Nothing arriving is the *expected* state right after a
+                    // seek, whoever asked for it: the old connection is gone
+                    // and the new range request has not come back yet. Acting
+                    // inside this window is how a slow skip turned into a
+                    // reopen, and a reopen into the cascade.
+                    settling = SystemClock.elapsedRealtime() - lastSeekAtMs < SEEK_SETTLE_MS,
+                )
+                if (action == StallTracker.Action.WAIT) continue
 
-                // Nothing arriving is the *expected* state right after a seek,
-                // whoever asked for it: the old connection is gone and the new
-                // range request has not come back yet. Acting inside this
-                // window is how a slow skip turned into a reopen, and a reopen
-                // into the cascade. The freeze counter keeps running underneath
-                // — this only postpones the response, never forgives it.
-                if (SystemClock.elapsedRealtime() - lastSeekAtMs < SEEK_SETTLE_MS) continue
-
-                // Cleared before the repair rather than after: both rungs
-                // return long before anything is delivered, and the next poll
-                // must not measure staleness against a buffer position that
-                // belongs to the connection just abandoned.
-                frozenMs = 0L
                 lastBuffered = C.TIME_UNSET
                 connectionSuspect = false
 
-                if (softReconnects < SOFT_RECONNECT_LIMIT) {
-                    softReconnects++
+                if (action == StallTracker.Action.SOFT_RECONNECT) {
                     softReconnect()
                     continue
                 }
@@ -1602,7 +1643,6 @@ class PlaybackController(
                 // COMMITTED_RETRY_LIMIT of them the cascade takes over, which
                 // is the right answer once a source has stopped responding
                 // that many times in a row.
-                softReconnects = 0
                 rememberPlaybackForFailover()
                 reopenCommitted()
             }
@@ -2085,6 +2125,24 @@ class PlaybackController(
          * pre-empt, since waiting for that timeout is the freeze being fixed.
          */
         const val STALL_FROZEN_MS = 10_000L
+
+        /**
+         * Media the buffer must gain across one [STALL_FROZEN_MS] window for
+         * the source to count as recovering rather than stalled.
+         *
+         * A fifth of real time. The number that matters against it is
+         * `bufferForPlaybackAfterRebufferMs`: playback does not resume until
+         * that much is buffered, so a link running at a fifth of real time
+         * needs the better part of a minute to produce a picture and will
+         * rebuffer within seconds of doing so. Replacing the connection is
+         * both faster and likelier to work — it is, exactly, what the viewer
+         * was doing by hand every time they pressed skip to unstick a film.
+         *
+         * Not lower, because playback is stopped while this is measured: the
+         * buffer grows at the full delivery rate, so anything a viewer would
+         * sit through clears this bar comfortably.
+         */
+        const val STALL_MIN_PROGRESS_MS = 2_000L
 
         /**
          * The same measurement, for a connection already presumed dead.

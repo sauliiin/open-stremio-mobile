@@ -132,6 +132,7 @@ import com.mdblisthub.tv.core.ui.component.HubSpinner
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.theme.HubTokens
 import com.mdblisthub.tv.player.ExoVideoSurface
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.mdblisthub.tv.player.MAX_SUBTITLE_OFFSET_MS
 import com.mdblisthub.tv.player.NO_TRACK
 import com.mdblisthub.tv.player.PlaybackFailure
@@ -281,6 +282,74 @@ fun PlayerScreen(
     val playback by viewModel.controller.state.collectAsStateWithLifecycle()
     val autoPlayNextEpisode by viewModel.autoPlayNextEpisode.collectAsStateWithLifecycle()
 
+    // ------------------------------------------------------ picture-in-picture
+
+    val pipHost = hostActivity as? PipHost
+    val pipAvailable = remember(hostActivity) {
+        hostActivity != null && PictureInPicture.isAvailable(hostActivity)
+    }
+    val inPipMode by (pipHost?.inPipMode ?: remember { MutableStateFlow(false) })
+        .collectAsStateWithLifecycle()
+
+    // Registered for the life of the player route and no longer. The receiver
+    // drives the controller, and the standing consent to shrink into a
+    // floating window has to be withdrawn when the film is gone — otherwise
+    // the home gesture from a browsing screen opens a window onto nothing.
+    DisposableEffect(hostActivity, pipAvailable) {
+        if (!pipAvailable || hostActivity == null) return@DisposableEffect onDispose { }
+        val receiver = PictureInPicture.registerControls(hostActivity) {
+            viewModel.controller.togglePlayPause()
+        }
+        pipHost?.onLeaveHint = {
+            // Android 12+ has already consented through the params, so this is
+            // the older path — and either way a film that is not on screen has
+            // nothing to float.
+            val snapshot = viewModel.controller.state.value
+            if (snapshot.canShowVideo) {
+                PictureInPicture.enter(
+                    activity = hostActivity,
+                    width = snapshot.videoWidth,
+                    height = snapshot.videoHeight,
+                    playing = snapshot.isPlaying,
+                )
+            } else {
+                false
+            }
+        }
+        onDispose {
+            pipHost?.onLeaveHint = null
+            runCatching { hostActivity.unregisterReceiver(receiver) }
+            PictureInPicture.update(
+                activity = hostActivity,
+                width = 0,
+                height = 0,
+                playing = false,
+                enabled = false,
+            )
+        }
+    }
+
+    // The params are kept current rather than assembled on the way out: the
+    // system reshapes the window from whatever it is holding at the moment the
+    // gesture lands, and on Android 12+ it never asks first.
+    LaunchedEffect(
+        pipAvailable,
+        playback.videoWidth,
+        playback.videoHeight,
+        playback.isPlaying,
+        playback.canShowVideo,
+    ) {
+        val activity = hostActivity ?: return@LaunchedEffect
+        if (!pipAvailable) return@LaunchedEffect
+        PictureInPicture.update(
+            activity = activity,
+            width = playback.videoWidth,
+            height = playback.videoHeight,
+            playing = playback.isPlaying,
+            enabled = playback.canShowVideo,
+        )
+    }
+
     var nextPromptVisible by remember(type, tmdbId, season, episode) { mutableStateOf(false) }
     var nextPromptTriggered by remember(type, tmdbId, season, episode) { mutableStateOf(false) }
     var playNextAtCountdownEnd by remember(type, tmdbId, season, episode) { mutableStateOf(true) }
@@ -387,6 +456,18 @@ fun PlayerScreen(
     var castRailOpen by remember { mutableStateOf(false) }
     var edgeAdjustment by remember { mutableStateOf<EdgeAdjustment?>(null) }
     var edgeAdjustmentVersion by remember { mutableIntStateOf(0) }
+    // A picker is a full-screen list; in a window this size it is a wall of
+    // unreadable text over the film, and nothing in the window can dismiss it
+    // because the floating window does not receive touches. Closing on the way
+    // in is the only moment this can be done.
+    LaunchedEffect(inPipMode) {
+        if (!inPipMode) return@LaunchedEffect
+        subtitlePickerOpen = false
+        subtitleSyncOpen = false
+        audioPickerOpen = false
+        castRailOpen = false
+    }
+
     val overlayOpen = subtitlePickerOpen || subtitleSyncOpen || audioPickerOpen || nextPromptVisible
 
     /**
@@ -805,12 +886,16 @@ fun PlayerScreen(
         // caption lifts for the controls, so it has to read the same flag they
         // do — otherwise opening sync on a paused film shunts the subtitle up
         // to clear a gradient that is not there.
-        val osdOnScreen = osdVisible && playback.canShowVideo && !overlayOpen
+        // In the floating window there is room for the picture and nothing
+        // else: a couple of hundred dp of width makes a gradient, a title
+        // plate and a seek bar into an obstruction rather than a control.
+        // Every overlay below reads this, not just the controls.
+        val osdOnScreen = osdVisible && playback.canShowVideo && !overlayOpen && !inPipMode
 
         // Independent of the OSD gradient: a caption still belongs on screen
         // while the controls are hidden, which is most of a film's runtime.
         val subtitleCue = playback.activeSubtitleCue
-        if (playback.canShowVideo && !listOverlayOpen && !subtitleCue.isNullOrBlank()) {
+        if (playback.canShowVideo && !listOverlayOpen && !inPipMode && !subtitleCue.isNullOrBlank()) {
             ExternalSubtitleOverlay(
                 text = subtitleCue,
                 liftForOsd = osdOnScreen,
@@ -821,7 +906,7 @@ fun PlayerScreen(
             )
         }
 
-        edgeAdjustment?.let { adjustment ->
+        edgeAdjustment?.takeIf { !inPipMode }?.let { adjustment ->
             PlayerEdgeAdjustmentOverlay(
                 adjustment = adjustment,
                 modifier = Modifier.align(Alignment.Center),
@@ -845,6 +930,18 @@ fun PlayerScreen(
                 onSeekTo = { position -> viewModel.controller.seekTo(position); poke() },
                 onTimelineInteraction = { poke() },
                 onCycleScale = { viewModel.controller.cycleScale(); poke() },
+                onEnterPip = if (pipAvailable && hostActivity != null) {
+                    {
+                        PictureInPicture.enter(
+                            activity = hostActivity,
+                            width = playback.videoWidth,
+                            height = playback.videoHeight,
+                            playing = playback.isPlaying,
+                        )
+                    }
+                } else {
+                    null
+                },
                 onOpenSubtitles = {
                     castRailOpen = false
                     subtitlePickerOpen = true
@@ -939,7 +1036,7 @@ fun PlayerScreen(
 
     Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(
-            visible = nextPromptVisible && ui.nextEpisode != null,
+            visible = nextPromptVisible && ui.nextEpisode != null && !inPipMode,
             enter = slideInHorizontally(
                 initialOffsetX = { width -> width },
                 animationSpec = tween(HubTokens.Motion.slowMillis, easing = FastOutSlowInEasing),
@@ -1598,6 +1695,8 @@ private fun PlayerOsd(
     onCycleScale: () -> Unit,
     onOpenSubtitles: () -> Unit,
     onOpenAudio: () -> Unit,
+    /** Null on a device without the floating window, which drops the button. */
+    onEnterPip: (() -> Unit)?,
     cast: List<CastMember>,
     castRailOpen: Boolean,
     castPreview: PlayerCastPreviewState,
@@ -1755,6 +1854,12 @@ private fun PlayerOsd(
                 label = stringResource(R.string.player_scale_short),
                 onClick = onCycleScale,
             )
+            if (onEnterPip != null) {
+                FlatOsdButton(
+                    label = stringResource(R.string.player_pip),
+                    onClick = onEnterPip,
+                )
+            }
             FlatOsdButton(
                 label = stringResource(R.string.player_cast),
                 onClick = onToggleCast,
