@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.util.Rational
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.mdblisthub.tv.R
 import kotlinx.coroutines.flow.StateFlow
@@ -230,6 +231,7 @@ object PictureInPicture {
         return receiver
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun toggleAction(context: Context, playing: Boolean): RemoteAction {
         val label = context.getString(
             if (playing) R.string.player_pause else R.string.player_play,
