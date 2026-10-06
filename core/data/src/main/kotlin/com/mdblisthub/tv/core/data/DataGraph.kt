@@ -96,7 +96,15 @@ class DataGraph(context: Context) {
         lists,
         scope,
     )
-    val media = MediaRepository(network.tmdb, network.mdblist, network.omdb, network.fanartTv, session, database)
+    val media = MediaRepository(
+        network.tmdb,
+        network.mdblist,
+        network.omdb,
+        network.fanartTv,
+        network.trakt,
+        session,
+        database,
+    )
 
     /**
      * The two answers to "where does this account's library live". Both are

@@ -30,6 +30,7 @@ import com.mdblisthub.tv.core.network.dto.PlaybackSessionDto
 import com.mdblisthub.tv.core.network.dto.StremioManifestDto
 import com.mdblisthub.tv.core.network.dto.TmdbDetailDto
 import com.mdblisthub.tv.core.network.dto.TmdbEpisodeDto
+import com.mdblisthub.tv.core.network.dto.TraktCommentDto
 import com.mdblisthub.tv.core.network.dto.orNullIfNA
 import kotlin.math.roundToInt
 
@@ -131,6 +132,8 @@ private val WRITER_JOBS = setOf("Screenplay", "Writer", "Story")
  * by; mdblist contributes the aggregated ratings, and OMDb only fills the gaps
  * mdblist left. Any of the three being absent degrades the row rather than
  * failing it — a detail screen with no Metacritic score is still a screen.
+ * Trakt reviews come from Trakt itself when it has any, mdblist's mirror
+ * otherwise.
  */
 fun buildDetailEntity(
     type: MediaType,
@@ -140,6 +143,7 @@ fun buildDetailEntity(
     omdb: OmdbDto?,
     now: Long,
     metadataComplete: Boolean = true,
+    traktComments: List<TraktCommentDto>? = null,
 ): MediaDetailEntity {
     val credits = tmdb.credits ?: tmdb.aggregateCredits
     val crew = credits?.crew.orEmpty()
@@ -214,21 +218,66 @@ fun buildDetailEntity(
                 score = (result.voteAverage * 10).roundToInt().takeIf { it > 0 },
             )
         },
-        reviews = info?.reviews.orEmpty().mapNotNull { review ->
+        // mdblist's `provider_id`: 1 = Trakt, 2 = TMDB.
+        reviews = info?.reviews.orEmpty().filter { it.providerId != 1 }.mapNotNull { review ->
             review.content.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             Review(
                 author = review.author.ifBlank { CoreText.anonymous },
                 content = review.content,
                 rating = review.rating,
-                // mdblist's `provider_id`: 1 = Trakt, 2 = TMDB.
-                provider = if (review.providerId == 1) ReviewProvider.TRAKT else ReviewProvider.TMDB,
+                provider = ReviewProvider.TMDB,
                 updatedAt = review.updatedAt,
             )
-        },
+        } + traktReviews(traktComments, info),
         metadataComplete = metadataComplete,
         fetchedAt = now,
     )
 }
+
+/**
+ * Trakt reviews straight from Trakt, or mdblist's mirror of them as fallback.
+ *
+ * The direct answer wins whenever it leaves anything to show: it is fresher,
+ * and it carries the spoiler flags mdblist's copy drops. Spoilers — flagged
+ * or tagged inline — are left out rather than rendered, since the review
+ * overlay has no way to hide part of a text. So are one-line shouts; Trakt's
+ * comments are mostly those, and they read as noise in a reviews row.
+ */
+private fun traktReviews(comments: List<TraktCommentDto>?, info: MdbInfoDto?): List<Review> {
+    val direct = comments.orEmpty()
+        .asSequence()
+        .filter { !it.spoiler && !it.comment.contains("[spoiler]", ignoreCase = true) }
+        .filter { it.comment.trim().split(WHITESPACE).size >= MIN_TRAKT_REVIEW_WORDS }
+        .take(MAX_TRAKT_REVIEWS)
+        .map { comment ->
+            Review(
+                author = comment.user?.name?.takeIf { it.isNotBlank() }
+                    ?: comment.user?.username?.takeIf { it.isNotBlank() }
+                    ?: CoreText.anonymous,
+                content = comment.comment.trim(),
+                rating = comment.userRating?.toDouble(),
+                provider = ReviewProvider.TRAKT,
+                updatedAt = comment.updatedAt,
+            )
+        }
+        .toList()
+    if (direct.isNotEmpty()) return direct
+
+    return info?.reviews.orEmpty().filter { it.providerId == 1 }.mapNotNull { review ->
+        review.content.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        Review(
+            author = review.author.ifBlank { CoreText.anonymous },
+            content = review.content,
+            rating = review.rating,
+            provider = ReviewProvider.TRAKT,
+            updatedAt = review.updatedAt,
+        )
+    }
+}
+
+private val WHITESPACE = Regex("\\s+")
+private const val MIN_TRAKT_REVIEW_WORDS = 15
+private const val MAX_TRAKT_REVIEWS = 10
 
 /** Brazilian rating first, then the US one, then whatever exists. */
 private fun certificationOf(tmdb: TmdbDetailDto): String? {
