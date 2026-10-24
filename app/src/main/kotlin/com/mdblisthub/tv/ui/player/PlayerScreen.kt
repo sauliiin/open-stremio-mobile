@@ -58,9 +58,11 @@ import kotlinx.coroutines.isActive
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay5
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -87,6 +89,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.LinearEasing
@@ -116,6 +119,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -159,6 +165,9 @@ private const val AUTO_NEXT_COUNTDOWN_MS = 10_000
 private val SUBTITLE_FONT_SIZE = 26.sp
 private val SUBTITLE_LINE_HEIGHT = 35.sp
 private const val SEEK_STEP_MS = 10_000L
+
+/** The on-screen skip buttons: finer than a key press, for catching a missed line. */
+private const val SEEK_BUTTON_STEP_MS = 5_000L
 private const val SUBTITLE_OFFSET_STEP_MS = 100L
 
 /**
@@ -250,8 +259,20 @@ fun PlayerScreen(
             ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         val previousBrightness = hostActivity?.window?.attributes?.screenBrightness
         hostActivity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        // The app is edge-to-edge and only ever hides the status bar, so on a
+        // device with three-button navigation — most tablets — the home/back
+        // buttons sat on top of the OSD's bottom row. Playback goes immersive
+        // instead; a swipe from the edge still brings the bars back briefly.
+        val insetsController = hostActivity?.let {
+            WindowCompat.getInsetsController(it.window, it.window.decorView)
+        }
+        insetsController?.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insetsController?.hide(WindowInsetsCompat.Type.systemBars())
 
         onDispose {
+            // Status bar stays hidden: that is the app's own resting state.
+            insetsController?.show(WindowInsetsCompat.Type.navigationBars())
             hostActivity?.requestedOrientation = previousOrientation
             if (previousBrightness != null) {
                 val attributes = hostActivity.window.attributes
@@ -927,7 +948,9 @@ fun PlayerScreen(
                 subtitleActive = playback.externalSubtitle != null ||
                     playback.currentSubtitleId != NO_TRACK,
                 onTogglePlay = { viewModel.controller.togglePlayPause(); poke() },
-                onSeekTo = { position -> viewModel.controller.seekTo(position); poke() },
+                onSeekBack = { viewModel.controller.seekBy(-SEEK_BUTTON_STEP_MS); poke() },
+                onSeekForward = { viewModel.controller.seekBy(SEEK_BUTTON_STEP_MS); poke() },
+                onSeekTo ={ position -> viewModel.controller.seekTo(position); poke() },
                 onTimelineInteraction = { poke() },
                 onCycleScale = { viewModel.controller.cycleScale(); poke() },
                 onEnterPip = if (pipAvailable && hostActivity != null) {
@@ -1690,6 +1713,8 @@ private fun PlayerOsd(
     playing: Boolean,
     subtitleActive: Boolean,
     onTogglePlay: () -> Unit,
+    onSeekBack: () -> Unit,
+    onSeekForward: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onTimelineInteraction: () -> Unit,
     onCycleScale: () -> Unit,
@@ -1707,6 +1732,7 @@ private fun PlayerOsd(
     modifier: Modifier = Modifier,
 ) {
     val progressBarFocusRequester = remember { FocusRequester() }
+    val seekForwardFocusRequester = remember { FocusRequester() }
     val firstFlatControlFocusRequester = remember { FocusRequester() }
     val castButtonFocusRequester = remember { FocusRequester() }
 
@@ -1760,11 +1786,39 @@ private fun PlayerOsd(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+            SeekStepButton(
+                icon = Icons.Filled.Replay5,
+                contentDescription = stringResource(R.string.player_rewind_5),
+                onClick = onSeekBack,
+                modifier = Modifier.onKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    when (event.key) {
+                        Key.DirectionRight -> playButtonFocusRequester.requestFocus()
+                        Key.DirectionDown -> firstFlatControlFocusRequester.requestFocus()
+                        else -> false
+                    }
+                },
+            )
             TimelinePlayButton(
                 playing = playing,
                 onClick = onTogglePlay,
                 modifier = Modifier
                     .focusRequester(playButtonFocusRequester)
+                    .onKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                        when (event.key) {
+                            Key.DirectionRight -> seekForwardFocusRequester.requestFocus()
+                            Key.DirectionDown -> firstFlatControlFocusRequester.requestFocus()
+                            else -> false
+                        }
+                    },
+            )
+            SeekStepButton(
+                icon = Icons.Filled.Forward5,
+                contentDescription = stringResource(R.string.player_forward_5),
+                onClick = onSeekForward,
+                modifier = Modifier
+                    .focusRequester(seekForwardFocusRequester)
                     .onKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                         when (event.key) {
@@ -2083,6 +2137,40 @@ private fun TimelinePlayButton(
             imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
             contentDescription = stringResource(if (playing) R.string.player_pause else R.string.player_play),
             tint = HubColors.Background,
+            modifier = Modifier.size(28.dp),
+        )
+    }
+}
+
+/**
+ * A short skip either side of play. Quieter than play itself — no filled
+ * circle until focused — but the same fingertip target as every other OSD
+ * control, so it is not the one that misses on a tablet.
+ */
+@Composable
+private fun SeekStepButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val scale by animateFloatAsState(if (focused) 1.13f else 1f, focusTween(), label = "seek-step-scale")
+
+    Box(
+        modifier = modifier
+            .scale(scale)
+            .size(OSD_BUTTON_SIZE)
+            .clip(CircleShape)
+            .background(if (focused) Color.White else Color.Transparent)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (focused) HubColors.Background else HubColors.Text,
             modifier = Modifier.size(28.dp),
         )
     }

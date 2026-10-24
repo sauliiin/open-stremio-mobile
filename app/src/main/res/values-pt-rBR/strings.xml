@@ -212,6 +212,8 @@
     <string name="player_back">Voltar</string>
     <string name="player_play">Tocar</string>
     <string name="player_pause">Pausar</string>
+    <string name="player_rewind_5">Voltar 5 segundos</string>
+    <string name="player_forward_5">Avançar 5 segundos</string>
     <string name="player_subtitles">Legenda</string>
     <string name="player_audio">Faixa de áudio</string>
     <string name="player_audio_short">Áudio</string>

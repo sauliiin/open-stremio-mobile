@@ -212,6 +212,8 @@
     <string name="player_back">Atrás</string>
     <string name="player_play">Reproducir</string>
     <string name="player_pause">Pausar</string>
+    <string name="player_rewind_5">Retroceder 5 segundos</string>
+    <string name="player_forward_5">Avanzar 5 segundos</string>
     <string name="player_subtitles">Subtítulos</string>
     <string name="player_audio">Pista de audio</string>
     <string name="player_audio_short">Audio</string>

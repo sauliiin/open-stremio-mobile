@@ -52,10 +52,19 @@ object HubDimens {
     // shape while making use of the height recovered from the compact nav.
     // Both landscape formats are scaled by roughly the same 12%, so neither
     // portrait posters nor Primefly's 16:9 artwork is stretched.
+    //
+    // A tablet is the exception to both. The landscape shrink exists because
+    // a sideways phone has ~400dp of height; a tablet has twice that either
+    // way up, so it keeps the portrait shape and scales it by
+    // [TABLET_CARD_SCALE] — otherwise a 10" screen showed phone-landscape
+    // posters a fingertip wide.
     val PosterWidth: Dp
         @Composable get() {
             val config = LocalConfiguration.current
             val isLandscape = config.screenWidthDp > config.screenHeightDp
+            if (config.smallestScreenWidthDp >= TABLET_MIN_SMALLEST_WIDTH_DP) {
+                return (if (HubColors.isPrimefly) 130.dp else 108.dp) * TABLET_CARD_SCALE
+            }
             if (HubColors.isPrimefly) return if (isLandscape) 146.dp else 130.dp
             return if (isLandscape) 73.dp else 108.dp
         }
@@ -63,9 +72,16 @@ object HubDimens {
         @Composable get() {
             val config = LocalConfiguration.current
             val isLandscape = config.screenWidthDp > config.screenHeightDp
+            if (config.smallestScreenWidthDp >= TABLET_MIN_SMALLEST_WIDTH_DP) {
+                return (if (HubColors.isPrimefly) 73.dp else 162.dp) * TABLET_CARD_SCALE
+            }
             if (HubColors.isPrimefly) return if (isLandscape) 82.dp else 73.dp
             return if (isLandscape) 110.dp else 162.dp
         }
+
+    /** Android's own tablet threshold (`sw600dp`); no phone reaches it in either orientation. */
+    private const val TABLET_MIN_SMALLEST_WIDTH_DP = 600
+    private const val TABLET_CARD_SCALE = 1.25f
 }
 
 @Composable

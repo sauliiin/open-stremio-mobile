@@ -212,6 +212,8 @@
     <string name="player_back">Retour</string>
     <string name="player_play">Lire</string>
     <string name="player_pause">Pause</string>
+    <string name="player_rewind_5">Reculer de 5 secondes</string>
+    <string name="player_forward_5">Avancer de 5 secondes</string>
     <string name="player_subtitles">Sous-titres</string>
     <string name="player_audio">Piste audio</string>
     <string name="player_audio_short">Audio</string>
