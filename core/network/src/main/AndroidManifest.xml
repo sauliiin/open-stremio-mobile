@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Declared by the module that needs it rather than left to the app:
+        `NetworkMeter` reads the active network's capabilities to tell Wi-Fi
+        from mobile data, and lint checks this module on its own.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+</manifest>
