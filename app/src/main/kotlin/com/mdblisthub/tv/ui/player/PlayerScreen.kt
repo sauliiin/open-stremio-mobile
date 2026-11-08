@@ -301,6 +301,10 @@ fun PlayerScreen(
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val castPreview by viewModel.castPreview.collectAsStateWithLifecycle()
     val playback by viewModel.controller.state.collectAsStateWithLifecycle()
+    // The playhead and the caption change on a timer and on every line of
+    // dialogue, so the controller publishes them apart from its state.
+    val position by viewModel.controller.position.collectAsStateWithLifecycle()
+    val activeSubtitleCue by viewModel.controller.activeSubtitleCue.collectAsStateWithLifecycle()
     val autoPlayNextEpisode by viewModel.autoPlayNextEpisode.collectAsStateWithLifecycle()
 
     // ------------------------------------------------------ picture-in-picture
@@ -383,7 +387,7 @@ fun PlayerScreen(
         ui.nextEpisode?.season,
         ui.nextEpisode?.episode,
         playback.phase,
-        playback.progress,
+        position.progress,
     ) {
         if (!autoPlayNextEpisode) {
             nextPromptVisible = false
@@ -394,7 +398,7 @@ fun PlayerScreen(
                 enabled = autoPlayNextEpisode,
                 hasNextEpisode = ui.nextEpisode != null,
                 phase = playback.phase,
-                progress = playback.progress,
+                progress = position.progress,
                 alreadyTriggered = nextPromptTriggered,
             )
         ) {
@@ -915,7 +919,7 @@ fun PlayerScreen(
 
         // Independent of the OSD gradient: a caption still belongs on screen
         // while the controls are hidden, which is most of a film's runtime.
-        val subtitleCue = playback.activeSubtitleCue
+        val subtitleCue = activeSubtitleCue
         if (playback.canShowVideo && !listOverlayOpen && !inPipMode && !subtitleCue.isNullOrBlank()) {
             ExternalSubtitleOverlay(
                 text = subtitleCue,
@@ -942,8 +946,8 @@ fun PlayerScreen(
                 modifier = Modifier.align(Alignment.CenterStart),
             )
             PlayerOsd(
-                positionMs = playback.positionMs,
-                durationMs = playback.durationMs,
+                positionMs = position.positionMs,
+                durationMs = position.durationMs,
                 playing = playback.isPlaying,
                 subtitleActive = playback.externalSubtitle != null ||
                     playback.currentSubtitleId != NO_TRACK,
@@ -3137,7 +3141,7 @@ private fun PlaybackFailure.message(): String = when (this) {
     PlaybackFailure.NoCandidates -> stringResource(R.string.player_error_no_candidates)
     is PlaybackFailure.AllCandidatesFailed ->
         pluralStringResource(R.plurals.player_error_all_failed, count, count)
-    PlaybackFailure.DecoyStreak -> stringResource(R.string.player_error_decoy_streak)
+    PlaybackFailure.NotCachedYet -> stringResource(R.string.player_error_not_cached)
     PlaybackFailure.ManualNoLink -> stringResource(R.string.player_error_manual_no_link)
     PlaybackFailure.ManualUnresponsive ->
         stringResource(R.string.player_error_manual_unresponsive)

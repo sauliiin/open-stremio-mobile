@@ -256,7 +256,7 @@
         <item quantity="one" tools:ignore="ImpliedQuantity">La seule source disponible a été essayée deux fois, sans succès.</item>
         <item quantity="other">Les %1$d sources disponibles ont été essayées deux fois, sans succès.</item>
     </plurals>
-    <string name="player_error_decoy_streak">Les sources renvoient un avis au lieu du film. Cela signifie presque toujours que le fournisseur de débridage limite les requêtes. Patientez quelques minutes et réessayez.</string>
+    <string name="player_error_not_cached">Aucune source de ce titre n’est prête sur votre service debrid. En ouvrir une lance le téléchargement : réessayez plus tard.</string>
     <string name="player_error_manual_no_link">Cette source ne contient aucun lien lisible.</string>
     <string name="player_error_manual_unresponsive">Cette source n’a pas répondu. Choisissez-en une autre dans la liste.</string>
     <string name="player_error_manual_failed">Cette source ne s’est pas ouverte. Choisissez-en une autre dans la liste.</string>
@@ -288,6 +288,8 @@
     <string name="login_continue_without">Continuer sans MDBList</string>
     <string name="login_create_account">Créer un compte gratuit</string>
     <string name="login_mdblist_only_button">Se connecter avec MDBList</string>
+    <string name="login_guest_button">Continuer en tant qu’invité</string>
+    <string name="login_error_guest">Impossible de démarrer le mode invité.</string>
     <string name="login_mdblist_only_intro">Sans compte Google, les addons et l’ordre des listes restent uniquement sur cet appareil — ils ne seront pas synchronisés avec vos autres téléviseurs ou votre téléphone. Les listes, la liste de suivi et la reprise de lecture continuent de fonctionner normalement grâce à votre compte MDBList.</string>
     <string name="login_mdblist_only_submit">Se connecter</string>
     <string name="login_mdblist_only_back">Retour</string>

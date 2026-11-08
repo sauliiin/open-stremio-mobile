@@ -18,9 +18,12 @@ import com.mdblisthub.tv.core.data.work.ImageMemoryTrimmer
 import com.mdblisthub.tv.core.data.work.ImageWarmer
 import com.mdblisthub.tv.core.model.HubThemeVariant
 import com.mdblisthub.tv.core.network.ApiConfig
+import com.mdblisthub.tv.core.network.ApiCredentials
+import com.mdblisthub.tv.core.network.NetworkMeter
 import com.mdblisthub.tv.core.ui.theme.HubColors
 import com.mdblisthub.tv.core.ui.coil.AlwaysCrossfadeTransitionFactory
 import com.mdblisthub.tv.player.OfflineDownloads
+import com.mdblisthub.tv.torrent.TorrentStreaming
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -34,6 +37,23 @@ class HubApplication : Application(), Configuration.Provider, SingletonImageLoad
 
     override fun onCreate() {
         super.onCreate()
+        // Before anything can build a network client: the keys are injected at
+        // build time from outside the repository, not compiled into the source.
+        ApiConfig.configure(
+            ApiCredentials(
+                tmdb = BuildConfig.TMDB_API_KEY,
+                omdb = BuildConfig.OMDB_API_KEY,
+                fanartTv = BuildConfig.FANART_TV_API_KEY,
+                traktClientId = BuildConfig.TRAKT_CLIENT_ID,
+                traktClientSecret = BuildConfig.TRAKT_CLIENT_SECRET,
+                simklClientId = BuildConfig.SIMKL_CLIENT_ID,
+                openSubtitles = BuildConfig.OPENSUBTITLES_API_KEY,
+                wyzie = BuildConfig.WYZIE_API_KEY,
+                appVersion = BuildConfig.VERSION_NAME,
+            ),
+        )
+        NetworkMeter.install(this)
+        TorrentStreaming.install(this)
         graph = DataGraph(this)
         OfflineDownloads.initialize(this, graph.network.playbackClient)
 

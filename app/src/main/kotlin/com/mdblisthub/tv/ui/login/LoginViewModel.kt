@@ -156,6 +156,26 @@ class LoginViewModel(private val graph: DataGraph) : ViewModel() {
         }
     }
 
+    /**
+     * No account at all: addons and TMDB only. Nothing is asked of Google,
+     * MDBList or Firebase, so it works on a phone with no signed-in account.
+     */
+    fun continueAsGuest() {
+        if (_state.value.busy) return
+        _state.update { it.copy(busy = true, error = null, errorRes = null) }
+        viewModelScope.launch {
+            graph.auth.continueAsGuest().fold(
+                onSuccess = {
+                    graph.scheduler.onSignedOut()
+                    _state.update { it.copy(busy = false, signedIn = true, key = "") }
+                },
+                onFailure = {
+                    _state.update { it.copy(busy = false, errorRes = R.string.login_error_guest) }
+                },
+            )
+        }
+    }
+
     fun changeGoogleAccount() {
         viewModelScope.launch {
             graph.auth.signOut()

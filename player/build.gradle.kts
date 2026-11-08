@@ -7,7 +7,14 @@ plugins {
 android {
     namespace = "com.mdblisthub.tv.player"
     compileSdk = libs.versions.compileSdk.get().toInt()
-    defaultConfig { minSdk = libs.versions.minSdk.get().toInt() }
+    defaultConfig {
+        minSdk = libs.versions.minSdk.get().toInt()
+        // The buffer budget is chosen from `Runtime.maxMemory()` and
+        // `ActivityManager.MemoryInfo`, neither of which a JVM test can
+        // produce a truthful answer for. The numbers that decide whether a box
+        // stutters only exist on a box.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -50,8 +57,12 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.androidx.core.ktx)
     implementation(libs.coroutines.android)
-
-    // The stall and prefetch rules are decisions over a *series* of polls,
-    // which is precisely what cannot be checked by watching a film play.
     testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    // The real playback client rather than a copy of its settings: its timeouts
+    // and protocols are part of what `StallLabDeviceTest` is measuring.
+    androidTestImplementation(projects.core.network)
+    androidTestImplementation(projects.torrent)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 }

@@ -1,6 +1,7 @@
 package com.mdblisthub.tv.ui.player
 
 import com.mdblisthub.tv.core.model.PlayableStream
+import com.mdblisthub.tv.core.model.StreamKind
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
 
@@ -18,7 +19,10 @@ internal suspend fun runOfflineSourceFlow(
     validateAutomatic: suspend (List<PlayableStream>) -> Boolean,
     validateFallback: suspend (List<PlayableStream>) -> Unit,
 ) {
-    val allSources = candidates.toList()
+    // A torrent's link is the in-app engine's loopback address, which only
+    // serves while that engine holds the torrent; it is not a file a download
+    // can keep. Offline copies come from links a server holds.
+    val allSources = candidates.toList().filter { it.kind != StreamKind.TORRENT }
     val automaticSources = allSources.filter(PlayableStream::isAutomaticOfflineCandidate)
 
     val automaticSucceeded = automaticSources.isNotEmpty() &&

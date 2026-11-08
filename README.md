@@ -64,6 +64,8 @@ O OmniStream requer **Android 7.0 (API 24)** ou superior.
 
 Você precisa do **JDK 17+**, Android SDK e um `local.properties` apontando para o SDK local.
 
+As chaves das APIs (TMDB, OMDb, Fanart.tv, Trakt, Simkl, OpenSubtitles e Wyzie) não ficam no código. Copie as entradas de [`secrets.properties.example`](secrets.properties.example) para o `local.properties`, para `~/.gradle/gradle.properties` ou para variáveis de ambiente, com os seus próprios valores.
+
 ```bash
 ./gradlew assembleDebug
 ./gradlew assembleRelease
@@ -93,7 +95,8 @@ O login usa Firebase Authentication com Google. Para rodar o app com sua própri
 | `:core:database` | Room como fonte da verdade da interface |
 | `:core:data` | Repositórios cache-first, sessão e workers |
 | `:core:ui` | Design system em Compose |
-| `:player` | Media3/ExoPlayer, buffer, failover, áudio e legendas |
+| `:player` | Media3/ExoPlayer, buffer, failover, áudio e legendas (veja [`PLAYBACK_STALLS.md`](player/PLAYBACK_STALLS.md)) |
+| `:torrent` | Reprodução de torrents sem debrid via libtorrent (somente em Wi-Fi) |
 | `:app` | Telas, navegação e grafo de objetos |
 
 O projeto não usa framework de injeção de dependência. O grafo está centralizado no [`DataGraph`](core/data/src/main/kotlin/com/mdblisthub/tv/core/data/DataGraph.kt).

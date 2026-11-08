@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,6 +8,19 @@ plugins {
     alias(libs.plugins.baselineprofile)
     alias(libs.plugins.google.services)
 }
+
+val localSecrets = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.isFile) file.inputStream().use(::load)
+}
+
+fun secret(name: String): String =
+    providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+        ?: localSecrets.getProperty(name).orEmpty()
+
+fun quoted(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.mdblisthub.tv"
@@ -23,8 +38,21 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 47
-        versionName = "1.1.25"
+        versionCode = 48
+        versionName = "1.1.26"
+
+        // Credentials live outside version control (see secrets.properties.example).
+        // They are still public to anyone reverse-engineering a client APK, so
+        // quota-bearing services should ultimately sit behind a backend; this at
+        // least keeps them out of the repository from here on.
+        buildConfigField("String", "TMDB_API_KEY", quoted(secret("TMDB_API_KEY")))
+        buildConfigField("String", "OMDB_API_KEY", quoted(secret("OMDB_API_KEY")))
+        buildConfigField("String", "FANART_TV_API_KEY", quoted(secret("FANART_TV_API_KEY")))
+        buildConfigField("String", "TRAKT_CLIENT_ID", quoted(secret("TRAKT_CLIENT_ID")))
+        buildConfigField("String", "TRAKT_CLIENT_SECRET", quoted(secret("TRAKT_CLIENT_SECRET")))
+        buildConfigField("String", "SIMKL_CLIENT_ID", quoted(secret("SIMKL_CLIENT_ID")))
+        buildConfigField("String", "OPENSUBTITLES_API_KEY", quoted(secret("OPENSUBTITLES_API_KEY")))
+        buildConfigField("String", "WYZIE_API_KEY", quoted(secret("WYZIE_API_KEY")))
 
         // x86 (32-bit) is back on the list deliberately: the emulator this
         // app is tested on reports exactly that ABI, and without a native
@@ -89,6 +117,7 @@ dependencies {
     implementation(projects.core.data)
     implementation(projects.core.ui)
     implementation(projects.player)
+    implementation(projects.torrent)
     implementation(files("../player/libs/media3-decoder-ffmpeg-1.11.0.aar"))
 
     implementation(libs.androidx.core.ktx)

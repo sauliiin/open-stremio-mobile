@@ -203,6 +203,7 @@ class MediaRepository(
         if (!force && cached != null &&
             cached.fetchedAt >= LANDSCAPE_ART_SELECTION_V2_MS &&
             cached.fetchedAt >= TRAKT_DIRECT_REVIEWS_V1_MS &&
+            cached.fetchedAt >= TMDB_EDITORIAL_METADATA_V1_MS &&
             !CachePolicy.isStale(cached.fetchedAt, maxAge)
         ) {
             return@runCatching
@@ -225,6 +226,7 @@ class MediaRepository(
             cached.metadataComplete &&
             cached.fetchedAt >= LANDSCAPE_ART_SELECTION_V2_MS &&
             cached.fetchedAt >= TRAKT_DIRECT_REVIEWS_V1_MS &&
+            cached.fetchedAt >= TMDB_EDITORIAL_METADATA_V1_MS &&
             !CachePolicy.isStale(cached.fetchedAt, CachePolicy.DETAIL_MS)
         ) {
             return@runCatching
@@ -332,6 +334,8 @@ class MediaRepository(
 private const val LANDSCAPE_ART_SELECTION_V2_MS = 1_786_478_867_150L
 /** Refreshes cached details once to source Trakt reviews from Trakt itself. */
 private const val TRAKT_DIRECT_REVIEWS_V1_MS = 1_791_244_800_000L
+/** Refreshes cached details once to source TMDB reviews and score directly, merged with the others. */
+private const val TMDB_EDITORIAL_METADATA_V1_MS = 1_794_096_000_000L
 /**
  * Comments fetched per title, before spoilers and one-liners are dropped.
  * Trakt pages default to ten, which would often leave nothing after filtering.

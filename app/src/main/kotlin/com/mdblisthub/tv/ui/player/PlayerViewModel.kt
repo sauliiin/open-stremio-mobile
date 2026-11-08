@@ -1,5 +1,7 @@
 package com.mdblisthub.tv.ui.player
 
+import com.mdblisthub.tv.core.network.NetworkMeter
+import com.mdblisthub.tv.torrent.TorrentStreaming
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -102,6 +104,11 @@ class PlayerViewModel(
         // Same connection pool the mirror probe used, so the handshake it paid
         // for is reused rather than repeated — see `HttpClients.playback`.
         callFactory = graph.network.playbackClient,
+        // A torrent from its swarm keeps downloading until it is told to stop,
+        // so the engine drops it the moment the player moves to another source.
+        onSourceOpened = { stream -> TorrentStreaming.keepOnly(stream?.infoHash) },
+        // The disk read-ahead works far ahead of the picture: Wi-Fi only.
+        allowReadAhead = { !NetworkMeter.isMetered() },
     )
 
     init {
@@ -240,10 +247,7 @@ class PlayerViewModel(
             return
         }
 
-        val candidates = graph.streams.candidates(
-            type,
-            stremioId,
-        )
+        val candidates = graph.streams.candidates(type, stremioId, runtimeMinutes)
 
         _ui.update { it.copy(searching = false) }
         controller.play(
@@ -277,7 +281,7 @@ class PlayerViewModel(
         runtimeMinutes: Int?,
     ) {
         runOfflineSourceFlow(
-            candidates = graph.streams.candidates(type, stremioId),
+            candidates = graph.streams.candidates(type, stremioId, runtimeMinutes),
             validateAutomatic = { automaticSources ->
                 _ui.update { it.copy(searching = false, autoOfflineSelection = true) }
                 controller.play(
@@ -492,7 +496,7 @@ class PlayerViewModel(
             .distinctUntilChangedBy { it.phase }
             .collect { state ->
                 val current = target ?: return@collect
-                lastReportedProgress = state.progress * 100f
+                lastReportedProgress = controller.position.value.progress * 100f
 
                 // Written on the same transitions the provider is told about,
                 // because they are the same moments worth recording — and the

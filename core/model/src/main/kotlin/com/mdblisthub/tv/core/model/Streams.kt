@@ -5,14 +5,42 @@ import kotlinx.serialization.Serializable
 /** Why a stream can or cannot reach the player. */
 @Serializable
 enum class StreamKind {
-    /** A URL ExoPlayer can open directly — the only kind this app plays. */
+    /** A URL ExoPlayer can open directly. */
     DIRECT,
 
-    /** An `infoHash` with no debrid resolution behind it. */
+    /**
+     * An `infoHash` with no debrid resolution behind it, played through the app's own
+     * torrent engine: its [PlayableStream.url] is a loopback address that engine serves.
+     */
     TORRENT,
 
     /** The addon pointed at a web page, not a media file. */
     EXTERNAL,
+}
+
+/**
+ * How ready a link is to be watched right now, best first — the declaration
+ * order is the order the cascade walks them in.
+ *
+ * Read from the addon's own label, since the protocol has no field for it. An
+ * uncached link is not a slower version of a cached one: it asks the debrid
+ * service to start fetching the torrent, and what comes back in the meantime is
+ * a placeholder clip or a connection that trickles.
+ */
+@Serializable
+enum class SourceReadiness {
+    CACHED_REAL_DEBRID,
+    CACHED_DEBRID,
+    UNKNOWN,
+
+    /**
+     * A torrent played from its swarm, with no debrid service. After every link a
+     * server already holds, because a swarm is slower and less certain than any of
+     * them, and before an uncached debrid link, which plays nothing but a notice until
+     * the service has fetched the file.
+     */
+    PEER_TO_PEER,
+    NOT_CACHED,
 }
 
 /**
@@ -49,12 +77,21 @@ data class PlayableStream(
      * since some debrid links 403 without the right user agent or referer.
      */
     val headers: Map<String, String> = emptyMap(),
+    val readiness: SourceReadiness = SourceReadiness.UNKNOWN,
+    /** For a [StreamKind.TORRENT]: lowercase hex v1 info hash. */
+    val infoHash: String? = null,
+    /** For a [StreamKind.TORRENT]: the addon's `fileIdx`, the file to play. */
+    val fileIndex: Int? = null,
+    /** For a [StreamKind.TORRENT]: the addon's `sources`, as tracker URLs. */
+    val trackers: List<String> = emptyList(),
+    /** Seeders the addon's label reported, for a torrent. Its swarm's health, roughly. */
+    val seeders: Int? = null,
 ) {
-    val playable: Boolean get() = kind == StreamKind.DIRECT && !url.isNullOrBlank()
+    val playable: Boolean get() = kind != StreamKind.EXTERNAL && !url.isNullOrBlank()
 
     /**
      * Advertised size in bytes — what the probe checks a mirror's real response
-     * against, and what bounds an automatic offline choice.
+     * against.
      *
      * [sizeBytesHint] first, always. Falling back to re-parsing [size] is a
      * last resort because that string was itself scraped out of the addon's
@@ -79,14 +116,6 @@ data class PlayableStream(
 }
 
 private val STREAM_SIZE = Regex("""(\d+(?:[.,]\d+)?)\s*(GB|MB)""", RegexOption.IGNORE_CASE)
-
-/** The result of fanning a stream request out over every installed addon. */
-@Serializable
-data class StreamQuery(
-    val streams: List<PlayableStream> = emptyList(),
-    val queried: Int = 0,
-    val failed: Int = 0,
-)
 
 /**
  * An external subtitle track.

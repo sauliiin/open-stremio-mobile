@@ -248,7 +248,7 @@
         <item quantity="one">Se intentó la única fuente disponible, dos veces, y no abrió.</item>
         <item quantity="other">Se intentaron las %1$d fuentes disponibles, dos veces, y ninguna abrió.</item>
     </plurals>
-    <string name="player_error_decoy_streak">Las fuentes están devolviendo un aviso en lugar de la película, lo que casi siempre significa que el proveedor debrid está limitando las solicitudes. Espera unos minutos e inténtalo de nuevo.</string>
+    <string name="player_error_not_cached">Ninguna fuente de este título está lista en tu servicio de debrid. Abrir una pide la descarga: vuelve a intentarlo más tarde.</string>
     <string name="player_error_manual_no_link">Esa fuente no tiene un enlace reproducible.</string>
     <string name="player_error_manual_unresponsive">Esa fuente no respondió. Elige otra de la lista.</string>
     <string name="player_error_manual_failed">Esa fuente no abrió. Elige otra de la lista.</string>
@@ -280,6 +280,8 @@
     <string name="login_continue_without">Continuar sin MDBList</string>
     <string name="login_create_account">Crear una cuenta gratis</string>
     <string name="login_mdblist_only_button">Iniciar sesión con MDBList</string>
+    <string name="login_guest_button">Entrar como invitado</string>
+    <string name="login_error_guest">No se pudo iniciar el modo invitado.</string>
     <string name="login_mdblist_only_intro">Sin una cuenta de Google, los addons y el orden de las listas quedan solo en este dispositivo — no se sincronizarán con tus otros TVs o tu celular. Las listas, la watchlist y continuar viendo siguen funcionando normalmente, a través de tu propia cuenta de MDBList.</string>
     <string name="login_mdblist_only_submit">Iniciar sesión</string>
     <string name="login_mdblist_only_back">Atrás</string>

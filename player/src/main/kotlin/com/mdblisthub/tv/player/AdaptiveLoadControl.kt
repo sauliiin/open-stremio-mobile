@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.source.TrackGroupArray
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.upstream.Allocator
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import kotlin.math.abs
 
 /**
  * A [DefaultLoadControl] that reacts to the heap it is actually running on.
@@ -56,26 +57,19 @@ class AdaptiveLoadControl(
     private val delegate: DefaultLoadControl,
     private val allocator: DefaultAllocator,
     private val targetBufferBytes: Int,
-    /**
-     * What the delegate was built with — see
-     * [HeapBudget.bufferForPlaybackAfterRebufferMs]. Passed in rather than
-     * re-derived so the two can never disagree about the ceiling this wrapper
-     * is allowed to come in under.
-     */
-    private val rebufferCeilingMs: Int,
 ) : LoadControl {
 
     /**
      * Zero until throughput has been measured, not the maximum.
      *
      * The first seconds of playback are when the byte budget is emptiest and
-     * the forward buffer matters most, and starting at
-     * [HeapBudget.MAX_BACK_BUFFER_MS] meant a device whose whole budget is
-     * twenty seconds of film spent half of the first ten on media already
-     * played — before a single sample had been taken to find out whether it
-     * could afford to. Zero is `DefaultLoadControl`'s own default and the safe
-     * direction: the first [sampleIfDue] two seconds in raises it to whatever
-     * the surplus really allows.
+     * the forward buffer matters most, and starting at [HeapBudget
+     * .MAX_BACK_BUFFER_MS] meant a device whose whole budget is twenty seconds
+     * of film spent half of the first ten on media already played — before a
+     * single sample had been taken to find out whether it could afford to.
+     * Zero is `DefaultLoadControl`'s own default and the safe direction: the
+     * first [sampleIfDue] two seconds in raises it to whatever the surplus
+     * really allows.
      */
     @Volatile
     private var backBufferUs: Long = 0L
@@ -85,15 +79,12 @@ class AdaptiveLoadControl(
      * back — see [HeapBudget.rebufferStartMs].
      *
      * Seeded from the pessimistic bitrate assumption rather than left at the
-     * delegate's constant, because the first rebuffer can arrive before the
-     * first throughput sample does.
+     * delegate's flat constant, because the first rebuffer can arrive before
+     * the first throughput sample does.
      */
     @Volatile
-    private var rebufferStartUs: Long = HeapBudget.rebufferStartMs(
-        targetBufferBytes,
-        HeapBudget.ASSUMED_BYTES_PER_SECOND,
-        rebufferCeilingMs,
-    ) * 1_000L
+    private var rebufferStartUs: Long =
+        HeapBudget.rebufferStartMs(targetBufferBytes, HeapBudget.ASSUMED_BYTES_PER_SECOND) * 1_000L
 
     /**
      * The last throughput actually measured, kept rather than discarded.
@@ -113,6 +104,12 @@ class AdaptiveLoadControl(
     /** What the last [Log] line said, so an unchanged verdict is not repeated. */
     private var loggedBackBufferMs = -1L
     private var loggedRebufferStartMs = -1L
+
+    /** One warning per starvation episode, not one per `shouldContinueLoading`. */
+    private var loggedStarvation = false
+
+    /** True from the allocator filling until it has drained to [REFILL_AT_SHARE]. */
+    private var refillHeld = false
 
     // ------------------------------------------------- forwarded, unchanged
     //
@@ -139,7 +136,6 @@ class AdaptiveLoadControl(
     override fun retainBackBufferFromKeyframe(playerId: PlayerId): Boolean =
         delegate.retainBackBufferFromKeyframe(playerId)
 
-
     override fun shouldContinuePreloading(
         playerId: PlayerId,
         timeline: Timeline,
@@ -152,19 +148,14 @@ class AdaptiveLoadControl(
     override fun getBackBufferDurationUs(playerId: PlayerId): Long = backBufferUs
 
     /**
-     * Resumes on what the device can afford, not on one number per device
-     * class.
+     * Resumes on what the device can afford, not on one number for every
+     * device.
      *
      * The delegate is asked first and its answer is final when it is yes, so
      * nothing here can make a device wait *longer* than `DefaultLoadControl`
-     * would. All this adds is a second, lower threshold for the one case the
-     * per-device constant gets wrong: a budget that cannot hold
-     * `bufferForPlaybackAfterRebufferMs` of the stream actually playing, which
-     * is then asked to rebuild a cushion approaching its entire allowance
-     * before it may show a frame. It never finishes, so the picture stays
-     * stopped until the viewer presses skip — a seek being the one thing that
-     * either recomputes the requirement somewhere the link can satisfy or
-     * serves it from the disk cache outright.
+     * would. All this adds is a second, lower threshold where the flat constant
+     * would be a large share of what the byte budget holds at this bitrate, which
+     * is seconds of stopped picture spent on a link that has just faltered.
      *
      * Restricted to `rebuffering`, so the first frame of a film still waits
      * for the full `bufferForPlaybackMs` and nothing about startup changes.
@@ -201,7 +192,48 @@ class AdaptiveLoadControl(
         if (MemoryPressure.isTight && parameters.bufferedDurationUs > PRESSURE_FLOOR_US) {
             return false
         }
-        return delegate.shouldContinueLoading(parameters)
+        // Refill in bursts. `minBufferMs` is above what the byte budget holds, so the
+        // delegate has no hysteresis of its own here: with the allocator full, every
+        // sample played frees a segment and starts the loader again, and the link is
+        // never idle long enough for `MediaPrefetcher` to finish a chunk.
+        if (refillHeld &&
+            allocator.totalBytesAllocated > targetBufferBytes * REFILL_AT_SHARE &&
+            parameters.bufferedDurationUs >= REFILL_HOLD_FLOOR_US
+        ) {
+            return false
+        }
+        refillHeld = false
+        if (delegate.shouldContinueLoading(parameters)) return true
+
+        // Never refuse bytes with the buffer nearly empty.
+        //
+        // `minBufferMs` is far above what the byte budget holds, so the delegate is
+        // permanently in its "below min buffer" branch, where — with
+        // `prioritizeTimeOverSizeThresholds` off — loading stops the moment the
+        // allocator is full. The allocator, though, also holds the back buffer and
+        // every *disabled* track's samples ahead of the playhead, while
+        // `bufferedDurationUs` is the *least* buffered enabled track. On a badly
+        // interleaved file that is a full allocator with the video queue empty: the
+        // renderer is not ready, nothing is loading, and the engine waits forever.
+        //
+        // NuvioTV avoids the same trap by setting the prioritize flag outright; here
+        // that would let 120s of a remux into the heap, so the exception is confined
+        // to the starved zone, where the overshoot is bounded by the file's
+        // interleaving rather than by `minBufferMs`.
+        if (parameters.bufferedDurationUs < STARVATION_FLOOR_US) {
+            if (!loggedStarvation) {
+                loggedStarvation = true
+                Log.w(
+                    TAG,
+                    "allocator full (${allocator.totalBytesAllocated / MB}MB) with only " +
+                        "${parameters.bufferedDurationUs / 1_000}ms buffered — loading anyway",
+                )
+            }
+            return true
+        }
+        loggedStarvation = false
+        refillHeld = true
+        return false
     }
 
     /**
@@ -230,17 +262,16 @@ class AdaptiveLoadControl(
         val bytesPerSecond = lastBytesPerSecond
 
         val backBufferMs = HeapBudget.backBufferMs(targetBufferBytes, bytesPerSecond)
-        val rebufferStartMs =
-            HeapBudget.rebufferStartMs(targetBufferBytes, bytesPerSecond, rebufferCeilingMs)
+        val rebufferStartMs = HeapBudget.rebufferStartMs(targetBufferBytes, bytesPerSecond)
         backBufferUs = backBufferMs * 1_000L
         rebufferStartUs = rebufferStartMs * 1_000L
 
-        // Only when the verdict actually moves. This runs every two seconds
-        // for the length of a film, and a line per sample would bury the one
-        // thing worth reading — that on a constrained device the resume
-        // threshold lands below the per-device ceiling, which is the whole
-        // reason `shouldStartPlayback` is overridden.
-        if (backBufferMs != loggedBackBufferMs || rebufferStartMs != loggedRebufferStartMs) {
+        // Only when the verdict moves by something a viewer could notice. This runs
+        // every two seconds for the length of a film, and the rate it is derived from
+        // wobbles on every sample.
+        if (abs(backBufferMs - loggedBackBufferMs) >= LOG_STEP_MS ||
+            abs(rebufferStartMs - loggedRebufferStartMs) >= LOG_STEP_MS
+        ) {
             loggedBackBufferMs = backBufferMs
             loggedRebufferStartMs = rebufferStartMs
             Log.i(
@@ -249,7 +280,8 @@ class AdaptiveLoadControl(
                     "@ ${bytesPerSecond * 8 / 1_000_000}Mbps " +
                     "= ${targetBufferBytes * 1_000L / bytesPerSecond.coerceAtLeast(1L)}ms of film; " +
                     "resume after rebuffer at ${rebufferStartMs}ms " +
-                    "(ceiling ${rebufferCeilingMs}ms), back buffer ${backBufferMs}ms",
+                    "(ceiling ${HeapBudget.bufferForPlaybackAfterRebufferMs()}ms), " +
+                    "back buffer ${backBufferMs}ms",
             )
         }
     }
@@ -260,6 +292,8 @@ class AdaptiveLoadControl(
         const val MB = 1024 * 1024
 
         const val SAMPLE_INTERVAL_MS = 2_000L
+
+        const val LOG_STEP_MS = 1_000L
 
         /** Under a second of buffer, the throughput division is mostly noise. */
         const val MIN_MEASURABLE_BUFFER_US = 1_000_000L
@@ -272,5 +306,21 @@ class AdaptiveLoadControl(
          * for, just without the headroom above it.
          */
         const val PRESSURE_FLOOR_US = 30L * 1_000_000L
+
+        /**
+         * Below this much buffer, a full allocator is not allowed to stop
+         * loading — see [shouldContinueLoading]. Above [HeapBudget
+         * .MIN_REBUFFER_START_MS], so the resume threshold can always be met.
+         */
+        const val STARVATION_FLOOR_US = 3L * 1_000_000L
+
+        /** How far the allocator drains before the next burst. */
+        const val REFILL_AT_SHARE = 0.85
+
+        /**
+         * Below this a burst starts regardless. Not under the resume threshold, or a
+         * rebuffer could wait for a buffer the held loader would never bring.
+         */
+        val REFILL_HOLD_FLOOR_US = HeapBudget.bufferForPlaybackAfterRebufferMs() * 1_000L
     }
 }

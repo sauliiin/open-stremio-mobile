@@ -34,6 +34,8 @@ class TraktTokenStore(context: Context) {
 
     private val store = context.applicationContext.traktDataStore
     private val json = Json { ignoreUnknownKeys = true }
+    @Volatile private var cachedAccessToken: String? = null
+    @Volatile private var cachedRefreshToken: String? = null
 
     val account: Flow<TraktAccount?> = store.data.map { prefs ->
         prefs[KEY_ACCOUNT]?.let { raw ->
@@ -43,16 +45,15 @@ class TraktTokenStore(context: Context) {
 
     val linked: Flow<Boolean> = store.data.map { it[KEY_ACCESS].isNullOrBlank().not() }
 
-    suspend fun currentAccount(): TraktAccount? = account.first()
-
     suspend fun isLinked(): Boolean = linked.first()
 
-    suspend fun accessToken(): String = store.data.first()[KEY_ACCESS].orEmpty()
+    suspend fun accessToken(): String = cachedAccessToken ?: store.data.first()[KEY_ACCESS].orEmpty().also {
+        cachedAccessToken = it
+    }
 
-    suspend fun refreshToken(): String = store.data.first()[KEY_REFRESH].orEmpty()
-
-    /** Unix milliseconds the access token stops being accepted at. */
-    suspend fun expiresAt(): Long = store.data.first()[KEY_EXPIRES_AT] ?: 0
+    suspend fun refreshToken(): String = cachedRefreshToken ?: store.data.first()[KEY_REFRESH].orEmpty().also {
+        cachedRefreshToken = it
+    }
 
     /**
      * Stores a freshly issued pair.
@@ -69,6 +70,8 @@ class TraktTokenStore(context: Context) {
             it[KEY_REFRESH] = token.refreshToken
             it[KEY_EXPIRES_AT] = issuedAtMs + token.expiresIn * 1000
         }
+        cachedAccessToken = token.accessToken
+        cachedRefreshToken = token.refreshToken
     }
 
     suspend fun saveAccount(account: TraktAccount) {
@@ -77,6 +80,8 @@ class TraktTokenStore(context: Context) {
 
     suspend fun clear() {
         store.edit { it.clear() }
+        cachedAccessToken = ""
+        cachedRefreshToken = ""
     }
 
     private companion object {

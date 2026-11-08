@@ -17,11 +17,10 @@ sealed interface PlaybackFailure {
     data class AllCandidatesFailed(val count: Int) : PlaybackFailure
 
     /**
-     * Several sources in a row served a placeholder clip instead of the film,
-     * which in practice means the debrid provider is rate limiting rather than
-     * that the mirrors are individually dead.
+     * Every link was one the debrid service has not fetched yet, so each opened as its
+     * notice. Opening it is what asks the service to start, so trying later can work.
      */
-    data object DecoyStreak : PlaybackFailure
+    data object NotCachedYet : PlaybackFailure
 
     /** The source the user picked by hand has no URL to open. */
     data object ManualNoLink : PlaybackFailure

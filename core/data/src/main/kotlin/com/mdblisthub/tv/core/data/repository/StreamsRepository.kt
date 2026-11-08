@@ -1,20 +1,30 @@
 package com.mdblisthub.tv.core.data.repository
 
+import android.os.SystemClock
+import android.util.Log
 import com.mdblisthub.tv.core.data.mapper.OPENSUBTITLES_FILE_SCHEME
 import com.mdblisthub.tv.core.data.mapper.SubtitleFileParser
+import com.mdblisthub.tv.core.data.mapper.COMFORTABLE_BITS_PER_SECOND
+import com.mdblisthub.tv.core.data.mapper.COMFORTABLE_METERED_BITS_PER_SECOND
 import com.mdblisthub.tv.core.data.mapper.rankForPlayback
 import com.mdblisthub.tv.core.data.mapper.rankSubtitles
 import com.mdblisthub.tv.core.data.mapper.toOption
 import com.mdblisthub.tv.core.data.mapper.toPlayable
 import com.mdblisthub.tv.core.model.MediaType
 import com.mdblisthub.tv.core.model.PlayableStream
+import com.mdblisthub.tv.core.model.SourceReadiness
+import com.mdblisthub.tv.core.model.StreamKind
 import com.mdblisthub.tv.core.model.SubtitleOption
 import com.mdblisthub.tv.core.model.SubtitleTrack
 import com.mdblisthub.tv.core.network.ApiConfig
+import com.mdblisthub.tv.core.network.NetworkMeter
 import com.mdblisthub.tv.core.network.OpenSubtitlesApi
+import com.mdblisthub.tv.core.network.ResolvedLinks
 import com.mdblisthub.tv.core.network.StremioApi
 import com.mdblisthub.tv.core.network.WyzieApi
 import com.mdblisthub.tv.core.network.dto.OpenSubtitlesDownloadRequestDto
+import com.mdblisthub.tv.torrent.TorrentStreaming
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -28,17 +38,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
  * Where a title's playable links come from.
  *
  * `candidates` returns direct links already deduplicated and ranked. Automatic
- * playback walks that order; the offline path first filters it by advertised
- * size and validates the smaller subset before it ever asks for a manual pick.
+ * playback walks that order; manual selection shows the same order; the offline
+ * path first filters it by advertised size and validates the smaller subset
+ * before it ever asks for a manual pick.
  */
 class StreamsRepository(
     private val api: StremioApi,
@@ -52,11 +66,18 @@ class StreamsRepository(
      * Tuned for a yes/no signal, not for the download that follows: the
      * shared addon client's own timeouts (6s connect / 8s read) are sized for
      * fetching a JSON manifest, not for finding out in a hurry whether a
-     * video mirror is even alive.
+     * video mirror is even alive. The same protocols as `HttpClients.playback`,
+     * because they are part of what makes a pooled connection reusable: with any
+     * other list, the socket this warms up is one the player can never pick up.
+     *
+     * [ResolvedLinks] for the same reason: a probe of a debrid link is a full resolve, and
+     * keeping where it led lets the player open that link on the CDN without another.
      */
     private val probeClient = addonClient.newBuilder()
+        .protocols(listOf(Protocol.HTTP_1_1))
         .connectTimeout(PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .callTimeout(PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .addInterceptor(ResolvedLinks)
         .build()
 
     /**
@@ -68,16 +89,15 @@ class StreamsRepository(
         .build()
 
     /**
-     * Ranked, deduplicated, playable-only — healthy probes first, uncertain
-     * probes retained as fallback because some debrid servers reject ranges
-     * and then stream correctly when the real player opens them.
+     * Ranked, deduplicated, playable-only — delivered as they are verified.
      *
      * A flow rather than a list, and that is the whole point. The previous
      * version probed every mirror in parallel and then waited for the *slowest*
      * one before returning anything, so a link that answered in 200ms still
      * sat behind three and a half seconds of dead hosts timing out, and only
-     * then did ExoPlayer get to start. Here the probes still all run at once,
-     * but each result is handed over the moment it lands.
+     * then did ExoPlayer get to start. Here the probes still run in parallel,
+     * within [ProbeGate]'s limits, and each result is handed over the moment it
+     * lands.
      *
      * Awaiting them in rank order rather than completion order is deliberate:
      * emitting whoever answers first would quietly hand the film to a 480p
@@ -89,7 +109,11 @@ class StreamsRepository(
      * An addon that fails contributes nothing rather than failing the call:
      * with a dozen installed, one being down is the normal case.
      */
-    fun candidates(type: MediaType, id: String): Flow<PlayableStream> = channelFlow {
+    fun candidates(
+        type: MediaType,
+        id: String,
+        runtimeMinutes: Int? = null,
+    ): Flow<PlayableStream> = channelFlow {
         val providers = addons.addons().filter { it.serves("stream", type, id) }
         if (providers.isEmpty()) return@channelFlow
 
@@ -121,11 +145,18 @@ class StreamsRepository(
                 coroutineScope {
                     providers.forEach { addon ->
                         launch {
+                            val askedAt = SystemClock.elapsedRealtime()
                             val streams = runCatching {
                                 api.streams("${addon.base}/stream/${type.stremio}/$encoded.json")
                                     .streams
                                     .mapIndexed { index, dto -> dto.toPlayable(addon, index) }
+                                    .map(::withTorrentUrl)
                             }.getOrDefault(emptyList())
+                            Log.i(
+                                TAG,
+                                "addon ${addon.name} answered in ${SystemClock.elapsedRealtime() - askedAt}ms " +
+                                    "with ${streams.size} links",
+                            )
                             inbox.send(streams)
                         }
                     }
@@ -158,8 +189,16 @@ class StreamsRepository(
 
         // The window expired with nothing usable in hand. Starting is not an
         // option, so wait for whoever answers first, however long that takes;
-        // the addon client's own timeouts bound it.
-        while (firstWave.none { it.playable } && answered < providers.size) {
+        // the addon client's own timeouts bound it. A link the debrid service
+        // has not fetched yet does not count as usable: it would be opened
+        // first, and it takes far longer to play than a slower addon takes to
+        // answer with one that is ready. Nor does a torrent from its swarm, for
+        // the same reason, so a debrid addon answering a second late still
+        // goes ahead of it.
+        while (
+            firstWave.none { it.playable && it.readiness < SourceReadiness.PEER_TO_PEER } &&
+            answered < providers.size
+        ) {
             val result = inbox.receiveCatching()
             if (result.isClosed) break
             val batch = result.getOrNull() ?: continue
@@ -167,7 +206,15 @@ class StreamsRepository(
             firstWave += batch
         }
 
-        val ranked = withContext(Dispatchers.Default) { firstWave.rankForPlayback() }
+        val torrentRoom = TorrentStreaming.roomBytes()
+        val comfortable = if (NetworkMeter.isMetered()) {
+            COMFORTABLE_METERED_BITS_PER_SECOND
+        } else {
+            COMFORTABLE_BITS_PER_SECOND
+        }
+        val ranked = withContext(Dispatchers.Default) {
+            firstWave.rankForPlayback(runtimeMinutes, torrentRoom, comfortable)
+        }
         val seen = ranked.mapNotNullTo(mutableSetOf()) { it.url }
 
         // One gate for the whole call, not one per batch. Since the late
@@ -177,12 +224,16 @@ class StreamsRepository(
         // times that many sockets open at once on a set-top box. These probes
         // are synchronous OkHttp calls, which are exempt from the client
         // dispatcher's own limits, so this is the only thing bounding them.
-        val gate = Semaphore(PROBE_CONCURRENCY)
+        // The per-host limits live in it too, for the same reason.
+        val gate = ProbeGate()
 
         if (ranked.isNotEmpty()) {
             // The best-ranked candidate goes out unprobed, immediately.
-            // Actually opening it in the player is a stricter test than a
-            // range request anyway, so automatic playback should not wait.
+            // Actually opening it in the player is a stricter test than a range
+            // request anyway, so making it wait behind a probe only adds that
+            // probe's timeout to the one case that matters most — and debrid
+            // endpoints in particular routinely refuse a two-byte request,
+            // then stream fine.
             send(ranked.first())
             sendProbed(ranked.drop(1), gate)
         }
@@ -214,7 +265,7 @@ class StreamsRepository(
             // here rather than inside the launched child, or two batches
             // arriving together could both pass the same URL through.
             val late = withContext(Dispatchers.Default) {
-                batch.rankForPlayback().filter { it.url != null && seen.add(it.url!!) }
+                batch.rankForPlayback(runtimeMinutes, torrentRoom, comfortable).filter { it.url != null && seen.add(it.url!!) }
             }
             launch { sendProbed(late, gate) }
         }
@@ -224,30 +275,77 @@ class StreamsRepository(
      * Probes a group in parallel and emits it best-first, deprioritising —
      * never dropping — whatever flunks: a failed probe is weak evidence, for
      * the same reason the top candidate skips the probe entirely.
+     *
+     * Not every link is probed. A probe of a debrid link is a full resolve on
+     * the addon, and the addon's limits are shared with every device on the
+     * same connection — see [ProbeGate]. A link the debrid service has not
+     * fetched is not probed at all: resolving one tells the service to start
+     * downloading the torrent, and it is ranked last anyway. Nor is a torrent
+     * played from its swarm: probing one would start downloading it here.
      */
     private suspend fun ProducerScope<PlayableStream>.sendProbed(
         streams: List<PlayableStream>,
         // Passed in rather than built here, because `candidates` may be running
-        // several of these at once and the socket bound has to hold across all
-        // of them. See where it is constructed.
-        gate: Semaphore,
+        // several of these at once and the bounds have to hold across all of
+        // them. See where it is constructed.
+        gate: ProbeGate,
     ) {
         if (streams.isEmpty()) return
 
+        val startedAt = SystemClock.elapsedRealtime()
         val probes = streams.map { stream ->
-            async { stream to gate.withPermit { isReachable(stream) } }
+            val host = stream.url?.toHttpUrlOrNull()?.host.orEmpty()
+            val skip = stream.readiness == SourceReadiness.NOT_CACHED || stream.kind == StreamKind.TORRENT
+            if (skip || !gate.claim(host)) {
+                CompletableDeferred(Verdict.UNTESTED)
+            } else {
+                async { gate.withPermit(host) { probe(stream) } }
+            }
         }
 
-        val unverified = mutableListOf<PlayableStream>()
-        for (probe in probes) {
-            val (stream, reachable) = probe.await()
-            if (reachable) send(stream) else unverified += stream
+        val broken = mutableListOf<PlayableStream>()
+        val verdicts = mutableListOf<Verdict>()
+        for ((stream, probe) in streams.zip(probes)) {
+            val verdict = probe.await()
+            verdicts += verdict
+            if (verdict == Verdict.BROKEN) broken += stream else send(stream)
         }
-        unverified.forEach { send(it) }
+        broken.forEach { send(it) }
+        Log.i(
+            TAG,
+            "probed ${streams.size} links in ${SystemClock.elapsedRealtime() - startedAt}ms: " +
+                verdicts.groupingBy { it }.eachCount().entries.joinToString { "${it.value} ${it.key}" },
+        )
     }
 
-    private suspend fun isReachable(stream: PlayableStream): Boolean {
-        val url = stream.url ?: return false
+    /**
+     * A torrent's link is the torrent engine's own address, which is what makes it
+     * playable. Without the engine (it is only missing in tests) it stays unplayable.
+     */
+    private fun withTorrentUrl(stream: PlayableStream): PlayableStream {
+        if (stream.kind != StreamKind.TORRENT) return stream
+        // On a phone a swarm is Wi-Fi only: it downloads ahead of the picture and
+        // uploads to other peers, which on mobile data is the viewer's bill. Left
+        // without a URL it is simply not playable, exactly as before torrents were.
+        if (NetworkMeter.isMetered()) return stream
+        val hash = stream.infoHash ?: return stream
+        return stream.copy(url = TorrentStreaming.url(hash, stream.fileIndex, stream.trackers, stream.filename))
+    }
+
+    /** What a probe learned. Only [BROKEN] moves a link down. */
+    private enum class Verdict {
+        WORKS,
+        BROKEN,
+
+        /** The addon would not resolve it right now, which says nothing about the link. */
+        REFUSED,
+
+        /** Not probed: see [sendProbed]. */
+        UNTESTED,
+    }
+
+    private suspend fun probe(stream: PlayableStream): Verdict {
+        val url = stream.url ?: return Verdict.BROKEN
         return withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
@@ -256,17 +354,20 @@ class StreamsRepository(
                     .apply { stream.headers.forEach { (key, value) -> header(key, value) } }
                     .build()
                 probeClient.newCall(request).execute().use { response ->
-                    if (response.code >= 400) return@use false
+                    // Torrentio's nginx answers 429 once its resolve route is busy.
+                    if (response.code == 429) return@use Verdict.REFUSED
+                    if (response.code >= 400) return@use Verdict.BROKEN
 
                     // A removed link often returns HTTP 200 with an HTML/JSON
                     // notice. Treating only the status as validation is what
-                    // allowed those rows into the picker.
+                    // let those through as healthy, so the cascade ranked a
+                    // dead mirror above a working one.
                     val contentType = response.header("Content-Type")
                         ?.substringBefore(';')
                         ?.trim()
                         ?.lowercase()
                     if (contentType == "text/html" || contentType == "application/json") {
-                        return@use false
+                        return@use Verdict.BROKEN
                     }
 
                     // Progressive removal notices may still be real videos.
@@ -282,10 +383,11 @@ class StreamsRepository(
                         contentType == "application/dash+xml" ||
                         url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
                         url.substringBefore('?').endsWith(".mpd", ignoreCase = true)
-                    adaptiveManifest || expectedBytes == null || actualBytes == null ||
+                    val plausible = adaptiveManifest || expectedBytes == null || actualBytes == null ||
                         actualBytes >= expectedBytes * MIN_EXPECTED_SIZE_FRACTION
+                    if (plausible) Verdict.WORKS else Verdict.BROKEN
                 }
-            }.getOrDefault(false)
+            }.getOrDefault(Verdict.BROKEN)
         }
     }
 
@@ -411,11 +513,43 @@ class StreamsRepository(
             .flatten()
     }
 
-    /** How many installed addons even claim to serve streams for this id. */
-    suspend fun providerCount(type: MediaType, id: String): Int =
-        addons.addons().count { it.serves("stream", type, id) }
+    /**
+     * How many probes may run, in total and against one host.
+     *
+     * The total bounds sockets on the device. The per-host limits exist
+     * because of what a probe of a debrid link is: the addon resolving it with
+     * the debrid service, which is the one expensive thing the addon does.
+     * Measured on Torrentio with sixteen at once, its nginx answered 429 to
+     * most of the next twenty, and Real-Debrid answered some that did get
+     * through with Torrentio's "failed" notice instead of the file. Each of
+     * those pushed a working link down the order, and the player's own request,
+     * sent alongside them, met the same limit. That limit is per public IP, so
+     * every other device on the same connection spends from it too.
+     *
+     * So more probes at once made the start slower, not faster. Two at a time
+     * per host keeps the next candidates checked ahead of a cascade that takes
+     * seconds per attempt. Past [PROBES_PER_HOST] links on one host, the
+     * cascade reaching them is itself the test.
+     */
+    private class ProbeGate {
+        private val total = Semaphore(PROBE_CONCURRENCY)
+        private val perHost = ConcurrentHashMap<String, Semaphore>()
+        private val claimed = ConcurrentHashMap<String, Int>()
+
+        /** False once [host] has had its share of probes for this title. */
+        fun claim(host: String): Boolean =
+            claimed.merge(host, 1, Int::plus)!! <= PROBES_PER_HOST
+
+        suspend fun <T> withPermit(host: String, block: suspend () -> T): T =
+            // The host's permit first, so a probe waiting on its host does not
+            // hold one of the shared ones while it waits.
+            perHost.computeIfAbsent(host) { Semaphore(PROBES_AT_ONCE_PER_HOST) }
+                .withPermit { total.withPermit { block() } }
+    }
 
     private companion object {
+        const val TAG = "Playback"
+
         /**
          * Long enough for a real mirror to answer two bytes, short enough
          * that a dozen of these in parallel still lands well under what one
@@ -424,6 +558,19 @@ class StreamsRepository(
         const val PROBE_TIMEOUT_MS = 3_500L
         const val SUBTITLE_TIMEOUT_MS = 15_000L
         const val PROBE_CONCURRENCY = 16
+
+        /** See [ProbeGate]. */
+        const val PROBES_AT_ONCE_PER_HOST = 2
+        const val PROBES_PER_HOST = 8
+
+        /**
+         * How small a mirror's real file may be, against the size the addon
+         * advertised, before the probe stops believing it is the film.
+         *
+         * Loose on purpose — a quarter. The thing this catches is a removal
+         * notice of a few megabytes standing in for a feature of several
+         * gigabytes, and nothing legitimate lands anywhere near the line.
+         */
         const val MIN_EXPECTED_SIZE_FRACTION = 0.25
 
         /**

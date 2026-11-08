@@ -3,12 +3,13 @@ package com.mdblisthub.tv.player
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
-import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.ParserException
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlaybackException
@@ -16,24 +17,23 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.HttpDataSource
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.offline.DownloadHelper
 import androidx.media3.exoplayer.offline.DownloadRequest
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import androidx.media3.exoplayer.upstream.Loader
 import com.mdblisthub.tv.core.model.PlayableStream
 import com.mdblisthub.tv.core.model.PlaybackHint
+import com.mdblisthub.tv.core.model.SourceReadiness
+import com.mdblisthub.tv.core.model.StreamKind
 import com.mdblisthub.tv.core.model.SubtitleOption
 import com.mdblisthub.tv.core.model.SubtitleTrack
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.EOFException
 
 /**
  * Plays a title, deciding on its own which link to use — until it can't.
@@ -57,10 +58,11 @@ import kotlinx.coroutines.launch
  * automatic playback still has a chance.** They press play, and a queue of
  * candidates is walked until one produces a frame. A dead mirror, an expired
  * debrid token or a container the decoder chokes on are all the same event
- * here — move to the next one — and none of them is worth a dialog. A source
- * the controller has already proven dead is removed from
- * [PlaybackState.availableSources], so a rejected removal notice can never be
- * offered again as a manual escape hatch.
+ * here — move to the next one — and none of them is worth a dialog. Only once
+ * every candidate has failed (see [fail]) is the same queue handed to the UI
+ * as [PlaybackState.availableSources], so the user can try one by hand via
+ * [playManual] — at that point automatic failover has already proven it
+ * cannot decide for them.
  *
  * Candidates arrive as a [Flow] rather than a finished [List]: the repository
  * probes every mirror in parallel and hands each one over the moment it is
@@ -76,116 +78,98 @@ import kotlinx.coroutines.launch
  * Every call here happens on the thread this was constructed on (the
  * ViewModel's main thread): ExoPlayer is single-threaded by contract, and
  * `viewModelScope` dispatches to Main, so the coroutines below stay on it.
+ *
+ * Before changing how this recovers from a stall, read `player/PLAYBACK_STALLS.md`:
+ * what has been tried, what the measurements said, and the rules that came out of it.
  */
 @OptIn(UnstableApi::class)
 class PlaybackController(
     context: Context,
     private val scope: CoroutineScope,
     /**
-     * The client whose connection pool the mirror probe already warmed.
-     *
-     * When supplied, the player reads over OkHttp instead of the JDK's
-     * `HttpURLConnection`, which is what lets the TCP+TLS handshake
-     * `StreamsRepository.isReachable` just paid for be reused rather than
-     * repeated — typically a few hundred milliseconds off every start on
-     * home Wi-Fi. Null falls back to the built-in stack, so the module still
-     * works standalone.
+     * The client whose connection pool the mirror probe already warmed, so the
+     * TCP+TLS handshake `StreamsRepository.probe` just paid for is reused
+     * rather than repeated. Must not carry a `callTimeout`: here a single call is
+     * the whole film — see `HttpClients.playback`.
      */
-    callFactory: okhttp3.Call.Factory? = null,
+    callFactory: okhttp3.Call.Factory,
+    /**
+     * Told of every source opened, and of null on [release]. The app uses it to drop a
+     * torrent the moment the player moves to another source, so a swarm never goes on
+     * downloading a film nobody is watching.
+     */
+    private val onSourceOpened: (PlayableStream?) -> Unit = {},
+    /**
+     * Whether the disk read-ahead may download ahead of the picture right now.
+     *
+     * On a phone it can be on mobile data, where working gigabytes ahead of the
+     * viewer is a bill rather than a cushion. Asked on every position tick, so a
+     * film that starts on mobile data starts reading ahead once it reaches Wi-Fi.
+     */
+    private val allowReadAhead: () -> Boolean = { true },
 ) : Player.Listener {
 
     private val appContext = context.applicationContext
 
-    /**
-     * Per-candidate headers land here rather than on the MediaItem: some
-     * debrid links 403 without the right user agent or referer, and the
-     * factory is re-read on every `prepare`, so mutating it between attempts
-     * is what makes the header follow the candidate being tried.
-     */
-    private val httpDataSourceFactory: HttpDataSource.Factory = callFactory
-        ?.let {
-            // Timeouts come from the client itself; note that it must not
-            // carry a `callTimeout`, since here a single call is the whole
-            // film rather than a request for a JSON manifest.
-            OkHttpDataSource.Factory(it)
-        }
-        ?: DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            // Generous on purpose. A debrid endpoint answers the redirect
-            // instantly and then leaves the connection open while the file is
-            // prepared upstream, which measurably runs past thirty seconds on a
-            // cold link; the tighter values these replaced turned that ordinary
-            // warm-up into a failed source.
-            .setConnectTimeoutMs(30_000)
-            .setReadTimeoutMs(30_000)
+    private val dataPath = PlaybackDataPath(context, callFactory, scope)
+    private val prefetcher = dataPath.prefetcher
 
     /**
-     * Reads from disk before it reads from the network, when a cache could be
-     * opened at all.
+     * What a failed load means, which decides whether trying again can help.
      *
-     * `FLAG_IGNORE_CACHE_ON_ERROR` matters more here than in most apps: a
-     * partially written span from a mirror that died mid-download must never
-     * become the reason a *working* mirror cannot play.
-     */
-    private val upstreamFactory: DataSource.Factory =
-        DefaultDataSource.Factory(context.applicationContext, httpDataSourceFactory)
-
-    /**
-     * Hoisted out of [dataSourceFactory] because [prefetcher] needs the same
-     * instance: `SimpleCache` throws if two of them are pointed at one
-     * directory, and a prefetcher filling a *different* cache from the one the
-     * player reads is worse than no prefetcher at all.
-     */
-    private val mediaCache = MediaCache.get(context)
-
-    private val dataSourceFactory: DataSource.Factory =
-        mediaCache?.let { cache ->
-            CacheDataSource.Factory()
-                .setCache(cache)
-                .setUpstreamDataSourceFactory(upstreamFactory)
-                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-        } ?: upstreamFactory
-
-    /**
-     * Keeps the disk cache filled ahead of the playhead — the deep buffer that
-     * used to have to live in the Java heap.
+     * Retried without a limit by default: a hiccup on the link should never become
+     * "this source is dead", and the load resumes from the byte it reached. The stall
+     * watch is what gives up on a link, and it has the evidence to.
      *
-     * Null when no cache could be opened, which is the same condition that
-     * makes [dataSourceFactory] stream straight through: with nowhere to write,
-     * there is nothing to work ahead into.
-     */
-    private val prefetcher = mediaCache?.let { cache ->
-        MediaPrefetcher(
-            cache = cache,
-            upstreamFactory = upstreamFactory,
-            scope = scope,
-            maxWindowBytes = (MediaCache.budgetBytes * PREFETCH_CACHE_SHARE).toLong(),
-        )
-    }
-
-    /**
-     * The first line of defence against a source going quiet, and the one that
-     * matters most.
+     * **Bytes the demuxer rejects are the exception.** The same bytes come back on
+     * every retry, from every connection, so waiting cannot fix them. It is recorded
+     * for the stall watch, which skips past the damage once the film reaches it — see
+     * [skipDamage]. A link the host says is gone is fatal at once, because asking it
+     * again a dozen times is minutes of frozen picture.
      *
-     * A read timing out mid-film is a *load* error, and Media3 retries load
-     * errors a few times before giving up and escalating to a fatal
-     * `PlaybackException`. Retrying far more, with a longer backoff, keeps a
-     * mirror that pauses for half a minute from ever becoming "this source is
-     * dead" — the buffer drains, the picture waits, and playback resumes on
-     * the same link once bytes flow again. Without this, the escalation is
-     * what triggered a source switch mid-playback.
+     * `errorCount` restarts at 1 when a load makes progress, and the first error after
+     * that is already 2, so 3 is the first count that always means the same bytes failed
+     * twice in a row: one bad answer from a host is not a bad file.
+     *
+     * Runs on the playback thread, where touching `player` throws.
      */
-    private val loadErrorPolicy = object : DefaultLoadErrorHandlingPolicy(LOAD_RETRY_COUNT) {
+    private val loadErrorPolicy = object : DefaultLoadErrorHandlingPolicy(Int.MAX_VALUE) {
         override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
-            // Ramps 1s, 2s, 3s… to a ceiling, instead of the default's much
-            // shorter schedule. A stalled CDN is usually back within a minute,
-            // and waiting costs nothing but a paused picture.
-            val attempt = info.errorCount.coerceAtLeast(1)
-            return (attempt * LOAD_RETRY_STEP_MS).coerceAtMost(LOAD_RETRY_MAX_MS)
+            val error = info.exception
+            Log.w(TAG, "load error #${info.errorCount}: $error")
+            if (error.isLinkGone()) return C.TIME_UNSET
+            if (error.causes().any { it is HttpDataSource.InvalidResponseCodeException }) {
+                hostRefusedAtMs = SystemClock.elapsedRealtime()
+            }
+            // Before a first frame there is a queue waiting behind this link, and no film
+            // to protect. A dead host should cost seconds, not the attempt's whole cap.
+            if (committedStream == null && info.errorCount >= UNCOMMITTED_LOAD_ERRORS) {
+                openingAbandonedAtMs = SystemClock.elapsedRealtime()
+                return C.TIME_UNSET
+            }
+            if (info.errorCount >= DAMAGE_CONFIRMED_ERRORS && error.isDamagedContent()) {
+                damage.record(SystemClock.elapsedRealtime())
+            }
+            val attempt = info.errorCount.coerceAtLeast(1) - 1
+            return (LOAD_RETRY_FIRST_MS + attempt * LOAD_RETRY_STEP_MS).coerceAtMost(LOAD_RETRY_MAX_MS)
         }
     }
 
-    private val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+    private val damage = DamageEvidence(DAMAGE_PASSED_MS)
+
+    /** When the host last answered with an error status. Written on the playback thread. */
+    @Volatile
+    private var hostRefusedAtMs = 0L
+
+    /**
+     * When the policy gave up on a link that had not played yet. Written on the playback
+     * thread. Giving up raises no error while samples are queued: with nothing left to
+     * load the engine calls that READY, with a clock that cannot move. See [onReady].
+     */
+    @Volatile
+    private var openingAbandonedAtMs = 0L
+
+    private val mediaSourceFactory = DefaultMediaSourceFactory(dataPath.playerSource)
         .setLoadErrorHandlingPolicy(loadErrorPolicy)
 
     /**
@@ -194,19 +178,27 @@ class PlaybackController(
      */
     private val allocator = DefaultAllocator(/* trimOnReset = */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE)
 
-    /**
-     * The per-device resume cushion, read once — see
-     * [HeapBudget.bufferForPlaybackAfterRebufferMs]. It is a ceiling here, not
-     * the answer: [AdaptiveLoadControl] lowers it wherever the byte budget
-     * cannot hold that much of the stream actually playing.
-     */
-    private val rebufferCeilingMs = HeapBudget.bufferForPlaybackAfterRebufferMs(appContext)
-
     private val targetBufferBytes = HeapBudget.targetBufferBytes(context.applicationContext)
         // Registered before the player exists, so the first trim notice cannot
         // arrive with nothing listening. Idempotent — one registration per
         // process, however many films are played in it.
-        .also { MemoryPressure.install(appContext) }
+        .also { bytes ->
+            MemoryPressure.install(appContext)
+            // The three readings the budget was chosen from, not just the
+            // result: a buffer that came out small is a different problem
+            // depending on whether the heap ceiling, the free RAM or the
+            // per-tier floor is what decided it, and after the fact there is
+            // no way to tell them apart from the number alone.
+            Log.i(
+                TAG,
+                "buffer budget ${bytes / MB}MB from " +
+                    "heap ${Runtime.getRuntime().maxMemory() / MB}MB " +
+                    "(${HeapBudget.headroomBytes() / MB}MB free), " +
+                    "ram ${HeapBudget.totalRamBytes(appContext)?.div(MB)}MB " +
+                    "(${HeapBudget.spareRamBytes(appContext)?.div(MB)}MB spare); " +
+                    "disk cache ${MediaCache.budgetBytes / MB}MB",
+            )
+        }
 
     val player: ExoPlayer = ExoPlayer.Builder(
         context.applicationContext,
@@ -246,24 +238,16 @@ class PlaybackController(
                         // here, not the exceptional one.
                         /* minBufferMs = */ 120_000,
                         /* maxBufferMs = */ 600_000,
-                        // These two are Media3's own defaults, and that is the
-                        // point. They used to be 2_500/5_000, justified by a
-                        // comment claiming the default was 500ms — it is 1_000
-                        // (`DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS`).
-                        // So the old values were not caution, they were an
-                        // extra 1.5s on every start and 3s on every rebuffer,
-                        // paid for a benefit that was never being missed.
-                        /* bufferForPlaybackMs = */ DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                        // Above the 2s default, but no longer by the same
-                        // amount everywhere — see the function, which drops it
-                        // on constrained boxes. Refilling 8s of a high-bitrate
-                        // remux over a weak radio can outlast the outage it is
-                        // recovering from, and the picture stays stopped for
-                        // the whole of it. Only this one varies;
-                        // `bufferForPlaybackMs` stays at the default so the
-                        // *first* frame is still fast.
+                        // Every profile waits for 5s before the first frame
+                        // and 10s after a rebuffer. This gives the disk cache
+                        // a real forward cushion instead of immediately
+                        // returning to another freeze/resume cycle.
+                        /* bufferForPlaybackMs = */
+                        HeapBudget.bufferForPlaybackMs(),
+                        // RAM changes the byte ceiling, not this recovery
+                        // threshold: every device needs the same time cushion.
                         /* bufferForPlaybackAfterRebufferMs = */
-                        rebufferCeilingMs,
+                        HeapBudget.bufferForPlaybackAfterRebufferMs(),
                     )
                     // `DefaultAllocator` takes its `byte[]` from the *Java*
                     // heap, not native memory, so this is bounded by what the
@@ -281,9 +265,6 @@ class PlaybackController(
                     .build(),
                 allocator = allocator,
                 targetBufferBytes = targetBufferBytes,
-                // The same number the delegate was built with, so the wrapper
-                // knows the ceiling it may come in under but never exceed.
-                rebufferCeilingMs = rebufferCeilingMs,
             ),
         )
         // Without this nothing pauses the film when another app takes the
@@ -313,6 +294,24 @@ class PlaybackController(
 
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
+
+    /**
+     * The playhead, published apart from [state] — see [PlaybackPosition] for
+     * why. Nothing but the seek bar reads it, and it changes on a timer.
+     */
+    private val _position = MutableStateFlow(PlaybackPosition())
+    val position: StateFlow<PlaybackPosition> = _position.asStateFlow()
+
+    /**
+     * The external subtitle line on screen right now, or null in a gap.
+     *
+     * Its own flow for the same reason as [position], and with more to gain:
+     * this changes once per line of dialogue, which through [state] meant the
+     * entire player screen recomposing every couple of seconds for the length
+     * of a conversation.
+     */
+    private val _activeSubtitleCue = MutableStateFlow<String?>(null)
+    val activeSubtitleCue: StateFlow<String?> = _activeSubtitleCue.asStateFlow()
 
     /**
      * Candidates tried so far, in rank order. Append-only: [candidatesJob]
@@ -404,13 +403,14 @@ class PlaybackController(
     private var expectedRuntimeMs: Long? = null
 
     /**
-     * Candidates already unmasked as decoys, by queue position.
+     * Candidates not worth opening again, by queue position: decoys, and files
+     * given up on as damaged.
      *
      * Kept because the cascade walks the queue twice: without this, the
      * second pass would cheerfully re-open the same "this file was removed"
      * clip that was just rejected, and the user would watch it start again.
      */
-    private val decoyIndices = mutableSetOf<Int>()
+    private val rejectedIndices = mutableSetOf<Int>()
 
     private var watchdog: Job? = null
     private var ticker: Job? = null
@@ -422,39 +422,16 @@ class PlaybackController(
     private var stallWatch: Job? = null
 
     /**
-     * When the loader was last sent to fetch from a *new* offset — the
-     * viewer's seek, the resume correction in [onReady], or [softReconnect]'s
-     * own.
-     *
-     * [startStallWatch] reads it so that the silence a seek necessarily causes
-     * is never mistaken for a dead host. A seek closes the connection that was
-     * feeding the buffer and opens another one at a different byte offset, and
-     * on a cold debrid link that round trip measurably runs past ten seconds —
-     * which is exactly the window the stall watch used to fire in, tearing
-     * down a link whose only crime was being asked for a different part of the
-     * file.
+     * When the loader was last sent somewhere new. The silence a seek causes is not a
+     * dead host, and on a cold debrid link the new range request can take well over
+     * ten seconds to answer.
      */
     private var lastSeekAtMs = 0L
 
-    /**
-     * Set when the connection is *presumed* dead without any error saying so.
-     *
-     * The one case that produces it: a film paused for long enough that the
-     * socket has been sitting idle. ExoPlayer does not close a connection when
-     * the buffer fills — it stops reading and leaves it open — so a pause of a
-     * couple of minutes hands the host, and every NAT between here and it,
-     * ample time to drop a socket nobody is using. On a phone that window is
-     * shorter still: carrier NATs reap idle connections in a minute or two,
-     * and the handset changes network under the player without warning.
-     *
-     * Cleared by the first byte that moves the buffer, which is proof the
-     * connection survived after all — so the suspicion costs nothing when it
-     * is wrong, and saves most of the freeze when it is right.
-     */
-    private var connectionSuspect = false
-
-    /** Elapsed-realtime stamp of the last [pause]; read once, by [resume]. */
-    private var pausedAtMs = 0L
+    /** How many times this stretch of film has been skipped for damage, and when last. */
+    private var damageSkips = 0
+    private var lastDamageSkipAtMs = 0L
+    private var damageStartedAtMs = 0L
 
     /**
      * When [play] was called, and when the candidate now open was opened.
@@ -468,6 +445,26 @@ class PlaybackController(
     private var playStartedAtMs = 0L
     private var attemptStartedAtMs = 0L
 
+    /**
+     * When the picture last stopped to rebuffer, or zero when it has not.
+     *
+     * Exists for [TAG] alone, and measures the one thing the viewer actually
+     * reports: not that a rebuffer happened, but how long it lasted. A stall
+     * the engine recovers from in two seconds and one that sits there until a
+     * skip is pressed are the same event in every other log line.
+     */
+    private var rebufferStartedAtMs = 0L
+
+    /**
+     * Where a burst of skips has walked to, before any of it has been asked of
+     * the engine — see [nudge].
+     */
+    private var pendingSeekTargetMs: Long? = null
+    private var pendingSeekJob: Job? = null
+
+    /** How many skips this burst has taken, which is what grows the step. */
+    private var nudgeCount = 0
+
     /** Set by the screen; see [setOsdVisible]. Starts true, since the OSD does. */
     private var osdVisible = true
 
@@ -479,6 +476,7 @@ class PlaybackController(
      * moving on. Cleared whenever a new playback starts, so it can never leak
      * across titles.
      */
+    @Volatile
     private var committedStream: PlayableStream? = null
     private var committedRetries = 0
 
@@ -556,7 +554,7 @@ class PlaybackController(
         queue = mutableListOf()
         queueIndex = -1
         passes = 0
-        decoyIndices.clear()
+        rejectedIndices.clear()
         validatedSources.clear()
         manualMode = false
         sourceSelectionMode = selectManually
@@ -576,6 +574,7 @@ class PlaybackController(
         awaitingCandidate = true
         resumePercent = resumeAtPercent?.takeIf { it > 1f && it < 95f }
         resumeApplied = false
+
         applyHint(hint)
 
         // Held only for the ordinary cascade: when the user is picking a
@@ -596,8 +595,9 @@ class PlaybackController(
             null
         }
 
-        val initialPhase = if (selectManually) PlaybackPhase.SELECTING else PlaybackPhase.RESOLVING
         playStartedAtMs = SystemClock.elapsedRealtime()
+
+        val initialPhase = if (selectManually) PlaybackPhase.SELECTING else PlaybackPhase.RESOLVING
         _state.value = PlaybackState(phase = initialPhase, candidateCount = 0)
 
         candidatesJob = scope.launch {
@@ -609,6 +609,36 @@ class PlaybackController(
                 .catch { }
                 .collect { stream ->
                     queue += stream
+
+                    // Promoted to *next*, whenever it turns up.
+                    //
+                    // The grace window above only covers the case where the
+                    // release that worked last time is in the first probed
+                    // batch. Measurement says it often is not — the batches
+                    // land seconds apart — and a candidate that arrives after
+                    // the walk has started is still the one most likely to
+                    // play, so it jumps the rest of the queue instead of
+                    // waiting its turn behind forty others.
+                    //
+                    // Inserting at `queueIndex + 1` is what keeps the
+                    // bookkeeping honest: `rejectedIndices` holds indices into
+                    // this list, and every one it holds is at or before
+                    // `queueIndex`, so nothing already recorded moves.
+                    //
+                    // Only until something commits: once a source has produced
+                    // a picture the cascade is over, and a preference is not a
+                    // reason to interrupt a film that is already playing.
+                    if (!sourceSelectionMode && committedStream == null && preferredFilename != null &&
+                        stream.filename != null && stream.filename == preferredFilename
+                    ) {
+                        queue.removeAt(queue.lastIndex)
+                        queue.add((queueIndex + 1).coerceIn(0, queue.size), stream)
+                        preferredFilename = null
+                        awaitingPreferred = false
+                        preferredWatch?.cancel()
+                        Log.i(TAG, "preferred source promoted to next: ${stream.filename}")
+                    }
+
                     if (sourceSelectionMode && !selectionValidationMode &&
                         validatedSources.none { it.key == stream.key }
                     ) {
@@ -625,32 +655,6 @@ class PlaybackController(
                             availableSources = validatedSources.toList(),
                         )
                     }
-                    // Promoted to *next*, whenever it turns up.
-                    //
-                    // The grace window above only covers the case where the
-                    // release that worked last time is in the first probed
-                    // batch, and the batches land seconds apart. A candidate
-                    // arriving after the walk has started is still the one most
-                    // likely to play, so it jumps the rest of the queue.
-                    //
-                    // Inserting at `queueIndex + 1` keeps the bookkeeping
-                    // honest: `decoyIndices` holds indices into this list, and
-                    // every one it holds is at or before `queueIndex`.
-                    //
-                    // Only until something commits, and never while the user is
-                    // choosing a source by hand.
-                    if (!sourceSelectionMode && committedStream == null &&
-                        preferredFilename != null && stream.filename != null &&
-                        stream.filename == preferredFilename
-                    ) {
-                        queue.removeAt(queue.lastIndex)
-                        queue.add((queueIndex + 1).coerceIn(0, queue.size), stream)
-                        preferredFilename = null
-                        awaitingPreferred = false
-                        preferredWatch?.cancel()
-                        Log.i(TAG, "preferred source promoted to next: ${stream.filename}")
-                    }
-
                     if ((!sourceSelectionMode || selectionValidationMode) &&
                         awaitingCandidate && !awaitingPreferred
                     ) {
@@ -664,6 +668,9 @@ class PlaybackController(
             preferredWatch?.cancel()
             if (sourceSelectionMode && !selectionValidationMode) {
                 awaitingCandidate = false
+                // Nothing arrived to choose from — that is a failure the same
+                // way it is for the automatic cascade, just reached without
+                // ever trying to open anything.
                 if (validatedSources.isEmpty()) {
                     fail(PlaybackFailure.NoCandidates)
                 } else {
@@ -697,7 +704,7 @@ class PlaybackController(
         queue = mutableListOf(stream)
         queueIndex = 0
         passes = 0
-        decoyIndices.clear()
+        rejectedIndices.clear()
         validatedSources.clear()
         candidatesCollecting = false
         awaitingCandidate = false
@@ -719,6 +726,7 @@ class PlaybackController(
         // preference does not, since there is exactly one of them.
         applyHint(hint)
         preferredFilename = null
+        playStartedAtMs = SystemClock.elapsedRealtime()
 
         _state.value = PlaybackState(
             phase = PlaybackPhase.RESOLVING,
@@ -730,6 +738,33 @@ class PlaybackController(
     }
 
     /**
+     * Which of the two positions is the later one, not which is the more
+     * official one.
+     *
+     * The note here is refreshed on a timer as well as on every phase change;
+     * the provider only hears about phase changes. So a film watched straight
+     * through with no pause leaves the note tens of minutes ahead of the
+     * provider — measured at 50.6% against 24.9% on one run — and reading that
+     * gap as "watched elsewhere" threw away the fresher of the two every time.
+     *
+     * The provider still wins when it is genuinely *ahead*, because that can
+     * only mean another device carried the title further than this one ever
+     * did. Tolerance rather than a strict comparison, so the rounding both
+     * providers do to one decimal place is not mistaken for progress.
+     *
+     * The release name is kept whichever way it goes: a file is still the same
+     * file wherever it was last watched.
+     */
+    private fun applyHint(hint: PlaybackHint?) {
+        val storedPercent = hint?.progressPercent
+        val syncedPercent = resumePercent
+        val stillCurrent = storedPercent != null &&
+            (syncedPercent == null || storedPercent >= syncedPercent - HINT_PERCENT_TOLERANCE)
+        resumeExactMs = hint?.positionMs?.takeIf { it > 0 && stillCurrent }
+        preferredFilename = hint?.sourceFilename?.takeIf { it.isNotBlank() }
+    }
+
+    /**
      * Picks the next candidate, waiting on more from the probe flow if the
      * queue has been fully walked but might still grow, and wrapping for a
      * second pass once it is known no more are coming.
@@ -738,6 +773,14 @@ class PlaybackController(
      * first pass has often minted a fresh token by the time it comes round
      * again, and one more attempt is far cheaper than telling someone to try
      * later.
+     *
+     * A short queue is walked again after that, with a growing pause, until
+     * [PERSIST_MS] have passed since [play]. One or two links, which is what a
+     * little-known film often has, fail their two passes in a few seconds when
+     * the host is briefly refusing: a 429 from an addon's rate limit, a 503
+     * from a busy debrid server. Measured in the lab, that was an error four
+     * seconds in, on a link that worked fifteen seconds later. A link given
+     * up on for what it is, a notice or a damaged file, is never walked again.
      */
     private fun tryAdvance() {
         watchdog?.cancel()
@@ -747,14 +790,11 @@ class PlaybackController(
             if (candidatesCollecting) {
                 awaitingCandidate = true
                 _state.update {
-                    it.copy(
-                        phase = if (selectionValidationMode) {
-                            PlaybackPhase.SELECTING
-                        } else {
-                            PlaybackPhase.RESOLVING
-                        },
-                        activeStream = null,
-                    )
+                    if (selectionValidationMode) {
+                        it.copy(phase = PlaybackPhase.SELECTING, activeStream = null)
+                    } else {
+                        it.copy(phase = PlaybackPhase.RESOLVING)
+                    }
                 }
                 return
             }
@@ -763,6 +803,8 @@ class PlaybackController(
                 return
             }
             if (selectionValidationMode) {
+                // One pass is the whole validation: a link that did not open
+                // here is not offered for a download that has to work.
                 runCatching { player.stop() }
                 if (validatedSources.isEmpty()) {
                     fail(PlaybackFailure.AllCandidatesFailed(queue.size))
@@ -779,28 +821,43 @@ class PlaybackController(
                 return
             }
             passes++
-            if (passes >= MAX_PASSES) {
-                fail(PlaybackFailure.AllCandidatesFailed(queue.size))
+            val retryable = queue.indices.any { it !in rejectedIndices && queue[it].url != null }
+            if (!retryable || (passes >= MAX_PASSES && sincePlayMs() >= PERSIST_MS)) {
+                fail(
+                    // Every link a notice the debrid service shows while it fetches the
+                    // file: there is nothing to play yet, and saying so is the useful answer.
+                    if (queue.all { it.readiness == SourceReadiness.NOT_CACHED }) {
+                        PlaybackFailure.NotCachedYet
+                    } else {
+                        PlaybackFailure.AllCandidatesFailed(queue.size)
+                    },
+                )
                 return
             }
             queueIndex = -1
+            if (passes >= MAX_PASSES) {
+                val pauseMs = (PASS_PAUSE_MS shl (passes - MAX_PASSES)).coerceAtMost(MAX_PASS_PAUSE_MS)
+                Log.i(TAG, "queue of ${queue.size} walked $passes times by +${sincePlayMs()}ms, again in ${pauseMs}ms")
+                // On [watchdog], so anything that ends this playback ends the wait too.
+                watchdog = scope.launch {
+                    delay(pauseMs)
+                    tryAdvance()
+                }
+                return
+            }
             tryAdvance()
             return
         }
 
         queueIndex = nextIndex
-        if (queueIndex in decoyIndices) return tryAdvance()
+        if (queueIndex in rejectedIndices) return tryAdvance()
 
         val candidate = queue[queueIndex]
         if (candidate.url == null) return tryAdvance()
 
         _state.update {
             it.copy(
-                phase = if (selectionValidationMode) {
-                    PlaybackPhase.SELECTING
-                } else {
-                    PlaybackPhase.RESOLVING
-                },
+                phase = if (selectionValidationMode) PlaybackPhase.SELECTING else PlaybackPhase.RESOLVING,
                 attempt = queueIndex + 1,
                 candidateCount = queue.size,
                 error = null,
@@ -824,15 +881,10 @@ class PlaybackController(
      * the real duration is known.
      */
     private fun open(stream: PlayableStream) {
-        attemptStartedAtMs = SystemClock.elapsedRealtime()
-        Log.i(
-            TAG,
-            "open #${queueIndex + 1}/${queue.size} at +${sincePlayMs()}ms " +
-                "offline=${offlineRequest != null} addon=${stream.addon} " +
-                "quality=${stream.quality} size=${stream.sizeBytes} file=${stream.filename}",
-        )
-
         offlineRequest?.let { request ->
+            attemptStartedAtMs = SystemClock.elapsedRealtime()
+            Log.i(TAG, "open offline at +${sincePlayMs()}ms file=${stream.filename}")
+            onSourceOpened(stream)
             val mediaSource = DownloadHelper.createMediaSource(
                 request,
                 OfflineDownloads.cacheOnlyDataSourceFactory(),
@@ -850,29 +902,24 @@ class PlaybackController(
 
         val url = stream.url ?: return
 
-        // Stopped before the headers move, not after. The prefetcher builds its
-        // requests from the same shared factory, so a chunk still in flight
-        // when this line runs would finish under the *next* candidate's headers
-        // — and write whatever that host returned into the previous file's
-        // cache key.
-        prefetcher?.stop()
+        attemptStartedAtMs = SystemClock.elapsedRealtime()
+        Log.i(
+            TAG,
+            "open #${queueIndex + 1}/${queue.size} at +${sincePlayMs()}ms " +
+                "addon=${stream.addon} ${stream.readiness} quality=${stream.quality} " +
+                "size=${stream.sizeBytes} file=${stream.filename}",
+        )
 
-        // Replaced wholesale rather than merged: the factory is shared across
-        // every attempt, so a header the previous mirror needed would
-        // otherwise leak into this one's request.
-        httpDataSourceFactory.setDefaultRequestProperties(stream.headers)
+        dataPath.switchTo(stream.headers)
+        onSourceOpened(stream)
 
         val mediaItem = MediaItem.Builder()
             .setUri(url)
-            // Debrid links are signed and expire, so the URL is useless as a
-            // cache identity — the same file comes back tomorrow under a
-            // different query string and would miss every time. The release
-            // filename is the one stable thing an addon reliably reports.
-            // Without one, the URL remains the key, which still serves a
-            // backward seek inside the current session.
-            .setCustomCacheKey(stream.filename?.takeIf { it.isNotBlank() })
+            .setCustomCacheKey(stream.cacheKey())
             .build()
 
+        // A candidate being validated is opened from the start and paused: the
+        // check is whether it plays at all, not where the viewer left off.
         val startPositionMs = if (selectionValidationMode) {
             null
         } else {
@@ -904,12 +951,12 @@ class PlaybackController(
 
     /**
      * Plays exactly the source the user picked, bypassing the cascade
-     * entirely — called once the UI has offered up the validated
+     * entirely — called once [PlaybackPhase.FAILED] has already offered up
      * [PlaybackState.availableSources] and the user tapped one of them.
      *
-     * [queue] and [expectedRuntimeMs] are left untouched: a decoy is still a
-     * decoy regardless of who chose it, and a link can expire between being
-     * validated and being tapped.
+     * [queue] and [expectedRuntimeMs] are left untouched: the list the veil
+     * is showing came from `queue`, and re-failing has to be able to show it
+     * again, while a decoy is still a decoy regardless of who chose it.
      */
     fun playManual(stream: PlayableStream) {
         watchdog?.cancel()
@@ -1018,15 +1065,23 @@ class PlaybackController(
             Player.STATE_READY -> onReady()
             Player.STATE_ENDED -> onEnded()
             Player.STATE_BUFFERING -> {
-                // Before the state is even published. The picture has stopped,
-                // so every byte the link can deliver belongs to the player —
-                // and the second HTTP download this cancels was, on a thin
-                // connection, a real part of why it stopped.
-                prefetcher?.onPlayerStalled()
+                // Before the state is even published: the picture has stopped, so
+                // every byte the link can deliver belongs to the player.
+                prefetcher?.onLoadingChanged(true)
+                if (committedStream != null && rebufferStartedAtMs == 0L) {
+                    rebufferStartedAtMs = SystemClock.elapsedRealtime()
+                    Log.i(
+                        TAG,
+                        "rebuffer at ${player.currentPosition}ms " +
+                            "with ${player.totalBufferedDuration}ms buffered, " +
+                            "${allocator.totalBytesAllocated / MB}/${targetBufferBytes / MB}MB allocated, " +
+                            "loading=${player.isLoading}",
+                    )
+                }
                 _state.update {
                     // A buffer stall mid-playback is worth showing; one during
                     // the cascade is not, since the veil is already up.
-                    if (it.phase == PlaybackPhase.RESOLVING || it.phase == PlaybackPhase.SELECTING) {
+                    if (it.phase == PlaybackPhase.RESOLVING) {
                         it
                     } else {
                         it.copy(phase = PlaybackPhase.BUFFERING)
@@ -1037,15 +1092,6 @@ class PlaybackController(
         }
     }
 
-    /**
-     * Who owns the link, answered the moment it changes.
-     *
-     * `LoadControl` decides this several times a minute once the byte budget
-     * is full, and [MediaPrefetcher] used to learn about it only from the
-     * position ticker. Seconds of two downloads sharing one thin connection is
-     * enough to empty a buffer that was never deep to begin with, which is why
-     * this is an event and not a poll.
-     */
     override fun onIsLoadingChanged(isLoading: Boolean) {
         prefetcher?.onLoadingChanged(isLoading)
     }
@@ -1090,6 +1136,8 @@ class PlaybackController(
         // times as it takes, because the overwhelmingly likely cause is a
         // network hiccup that will pass.
         if (committedStream != null) {
+            // The host said the link is gone, so asking it again changes nothing.
+            if (error.errorCode in LINK_GONE_ERROR_CODES) committedRetries = COMMITTED_RETRY_LIMIT
             reopenCommitted()
             return
         }
@@ -1277,6 +1325,15 @@ class PlaybackController(
 
         if (isDecoy()) return rejectDecoy()
 
+        // Not a working link, only one that stopped with a few samples queued. With no
+        // other source, committing is still the better answer: the stall watch can skip
+        // what it cannot read.
+        if (committedStream == null && openingAbandonedAtMs > attemptStartedAtMs && hasOtherCandidate()) {
+            logAttemptEnd("abandoned")
+            tryAdvance()
+            return
+        }
+
         watchdog?.cancel()
         watchdog = null
 
@@ -1309,7 +1366,7 @@ class PlaybackController(
             // than the one the position was measured in. Then the percentage
             // is the only thing that still means something.
             val exactFits = exactMs != null && exactMs < duration - RESUME_TOLERANCE_MS
-            if (!exactFits && percent != null) {
+            if (!exactFits && percent != null && player.isCurrentMediaItemSeekable) {
                 val corrected = (duration * percent / 100f).toLong().coerceIn(0L, duration)
                 // The metadata runtime already placed the range request close
                 // to here (see `open`), so this is a correction, not a seek.
@@ -1317,7 +1374,7 @@ class PlaybackController(
                 // avoids paying for a rebuffer to fix an imperceptible error.
                 if (kotlin.math.abs(corrected - player.currentPosition) > RESUME_TOLERANCE_MS) {
                     Log.i(TAG, "resume correction to ${corrected}ms (was ${player.currentPosition}ms)")
-                    noteSeek()
+                    noteSeek(corrected)
                     player.seekTo(corrected)
                 }
             }
@@ -1327,10 +1384,18 @@ class PlaybackController(
         _state.update {
             it.copy(
                 phase = if (player.isPlaying) PlaybackPhase.PLAYING else PlaybackPhase.PAUSED,
-                durationMs = player.duration.coerceAtLeast(0),
                 error = null,
             )
         }
+        if (rebufferStartedAtMs != 0L) {
+            Log.i(
+                TAG,
+                "rebuffer ended after ${SystemClock.elapsedRealtime() - rebufferStartedAtMs}ms " +
+                    "with ${player.totalBufferedDuration}ms buffered",
+            )
+            rebufferStartedAtMs = 0L
+        }
+        _position.update { it.copy(durationMs = player.duration.coerceAtLeast(0)) }
         failoverPositionMs = null
         failoverPlayWhenReady = null
         updatePrefetch()
@@ -1385,6 +1450,37 @@ class PlaybackController(
     }
 
     /**
+     * Called from [onReady] and from every position tick, because `STATE_READY` can
+     * arrive before the duration is demuxed, and the tick does not know when the
+     * source changed. `MediaPrefetcher.start` is a no-op once running for this file.
+     */
+    private fun updatePrefetch() {
+        val prefetcher = prefetcher ?: return
+        val stream = committedStream ?: return
+        // A torrent is already on this device's disk as it arrives. Reading it ahead into
+        // the cache would store the film twice, and the swarm, not a socket, sets the pace.
+        if (stream.kind == StreamKind.TORRENT) return
+        // A download plays from its own cache, with nothing on the network to read ahead.
+        if (offlineRequest != null) return
+        // On mobile data the read-ahead would spend the viewer's plan gigabytes ahead of
+        // the picture. The player's own buffer still covers ordinary hiccups.
+        if (!allowReadAhead()) {
+            prefetcher.stop()
+            return
+        }
+        val url = stream.url ?: return
+        prefetcher.start(
+            uri = url.toUri(),
+            cacheKey = stream.cacheKey(),
+            durationMs = player.duration,
+        )
+        prefetcher.onPosition(
+            positionMs = player.currentPosition.coerceAtLeast(0L),
+            playerLoading = player.isLoading,
+        )
+    }
+
+    /**
      * `canShowVideo` does not include ENDED, so without this the OSD and its
      * "voltar" button disappear along with the video the instant a film
      * finishes, leaving a black screen with no way off it but the physical
@@ -1403,7 +1499,7 @@ class PlaybackController(
         // and, crucially, do not offer that source to the user.
         if (selectionValidationMode) {
             logAttemptEnd("ended-while-validating")
-            decoyIndices += queueIndex
+            rejectedIndices += queueIndex
             watchdog?.cancel()
             watchdog = null
             runCatching { player.stop() }
@@ -1461,8 +1557,7 @@ class PlaybackController(
         // own cannot be told apart from "the duration had not been demuxed
         // yet" — and the second would be rejecting perfectly good files.
         logAttemptEnd("decoy duration=${player.duration} expected=$expectedRuntimeMs")
-        decoyIndices += queueIndex
-        runCatching { player.stop() }
+        rejectedIndices += queueIndex
 
         // `resumeApplied` is deliberately left alone: nothing was watched, so
         // whatever resume point the user had is still owed to the next
@@ -1518,224 +1613,234 @@ class PlaybackController(
      * rate while nothing displays the position is pure cost — and on a set-top
      * box it is cost paid against the same frame budget the video decode needs.
      */
-    /**
-     * Points the prefetcher at the committed source and tells it where the
-     * playhead is.
-     *
-     * Called from [onReady] and from every position tick, because neither is
-     * sufficient alone: `STATE_READY` is where a source becomes committed but
-     * can arrive before the duration is demuxed, and the tick has the duration
-     * but no idea when the source changed. `MediaPrefetcher.start` is a no-op
-     * once it is already running for the same file, so calling it on every tick
-     * costs a string comparison.
-     *
-     * Reads `player` on the main thread only; the prefetcher gets plain values.
-     */
-    private fun updatePrefetch() {
-        val prefetcher = prefetcher ?: return
-        val stream = committedStream ?: return
-        val url = stream.url ?: return
-        prefetcher.start(
-            uri = Uri.parse(url),
-            // Must match what `open` puts on the MediaItem, or the two write
-            // to different keys and every prefetched byte is downloaded twice.
-            cacheKey = stream.filename?.takeIf { it.isNotBlank() },
-            durationMs = player.duration,
-        )
-        prefetcher.onPosition(
-            positionMs = player.currentPosition.coerceAtLeast(0L),
-            playerBufferedMs = player.totalBufferedDuration,
-            playerLoading = player.isLoading,
-        )
-    }
-
-    /**
-     * Catches the stall that never becomes an error.
-     *
-     * [watchdog] covers the opposite half of a source's life: it decides
-     * whether a candidate is worth waiting for, and [onReady] cancels it
-     * precisely because a link that has produced a picture has proven itself.
-     * From there until the film ends nothing was watching — and the failure
-     * this repairs lives entirely in that gap.
-     *
-     * A mirror behind a weak radio rarely *closes* the connection when it
-     * gives up; it simply stops sending. Nothing about that is an error, so
-     * the engine goes on waiting for a socket that will never deliver another
-     * byte, and the only thing that ends the wait is the load-level retry
-     * ladder above, one read timeout at a time. From the sofa (or the couch,
-     * or the bus) that is a picture frozen for a long stretch. And the reason
-     * seeking "fixes" it is not that the position was wrong: a seek closes the
-     * dead socket and opens a new one, which is the one thing a waiting player
-     * will not do for itself.
-     *
-     * So this does it instead, and sooner. [Player.getBufferedPosition] is the
-     * honest signal, but what counts is the *rate* it advances at, not whether
-     * it advances: a mirror that has gone quiet cannot move it at all, and one
-     * that trickles below [STALL_MIN_PROGRESS_MS] cannot reach the cushion
-     * playback needs to resume either. Both are a connection to replace, and
-     * treating the second as healthy — which is what reading this as a
-     * yes-or-no "has it moved" did — is why a film could sit buffering
-     * indefinitely with bytes arriving the whole time.
-     *
-     * The decision itself lives in [StallTracker], where it can be replayed
-     * off-device: no single poll of a trickling source looks any different
-     * from a healthy one, so the bug exists only in the series.
-     */
-    private fun startStallWatch() {
-        stallWatch?.cancel()
-        stallWatch = scope.launch {
-            val tracker = StallTracker(
-                pollMs = STALL_POLL_MS,
-                frozenMs = STALL_FROZEN_MS,
-                suspectMs = STALL_SUSPECT_MS,
-                minProgressMs = STALL_MIN_PROGRESS_MS,
-                softReconnectLimit = SOFT_RECONNECT_LIMIT,
-            )
-            var lastBuffered = C.TIME_UNSET
-
+    private fun startTicker() {
+        ticker?.cancel()
+        ticker = scope.launch {
             while (isActive) {
-                delay(STALL_POLL_MS)
-
-                // Paused is not stalled, and neither is anything the cascade is
-                // still deciding about. `committedStream` is what separates
-                // them — without one there is nothing for [reopenCommitted] to
-                // reopen, and the attempt watchdog owns that phase anyway.
-                val waiting = committedStream != null &&
-                    player.playWhenReady &&
-                    player.playbackState == Player.STATE_BUFFERING
-
-                val buffered = player.bufferedPosition
-
-                // A byte demuxed is a socket alive. This is the only thing that
-                // clears the suspicion `resume` raises, and it has to be
-                // checked whether or not the player is waiting: after a pause
-                // the buffer is full, so the proof arrives while the picture is
-                // playing happily rather than while it is stalled.
-                if (lastBuffered != C.TIME_UNSET && buffered != lastBuffered) {
-                    connectionSuspect = false
-                }
-                lastBuffered = buffered
-
-                val action = tracker.onPoll(
-                    waiting = waiting,
-                    bufferedMs = buffered,
-                    suspect = connectionSuspect,
-                    // Nothing arriving is the *expected* state right after a
-                    // seek, whoever asked for it: the old connection is gone
-                    // and the new range request has not come back yet. Acting
-                    // inside this window is how a slow skip turned into a
-                    // reopen, and a reopen into the cascade.
-                    settling = SystemClock.elapsedRealtime() - lastSeekAtMs < SEEK_SETTLE_MS,
-                )
-                if (action == StallTracker.Action.WAIT) continue
-
-                lastBuffered = C.TIME_UNSET
-                connectionSuspect = false
-
-                if (action == StallTracker.Action.SOFT_RECONNECT) {
-                    softReconnect()
-                    continue
-                }
-
-                // The link is not merely quiet, it has ignored a reconnection
-                // too. The counter inside `reopenCommitted` is what stops one
-                // that is genuinely gone from being reopened forever: after
-                // COMMITTED_RETRY_LIMIT of them the cascade takes over, which
-                // is the right answer once a source has stopped responding
-                // that many times in a row.
-                rememberPlaybackForFailover()
-                reopenCommitted()
+                delay(if (osdVisible) TICK_MS else IDLE_TICK_MS)
+                publishPosition()
             }
         }
     }
 
     /**
-     * Opens a new socket on the same file, at the same moment of it, without
-     * disturbing anything the viewer can see.
+     * Watches a source that is already playing, from its first frame to the end.
      *
-     * This is the app doing deliberately what a viewer does by accident when
-     * they nudge the controls to "unstick" a frozen film. A seek makes
-     * `ProgressiveMediaPeriod` abandon the load in flight — dead socket
-     * included — and start another one at the byte offset for the new
-     * position, while the renderers, the decoder, the track selection and the
-     * last frame on the surface are all left alone. `prepare()` shares none of
-     * that: it resets the renderers, which is what puts the shutter up.
-     *
-     * Two details make it reliable rather than occasionally a no-op:
-     *
-     * - **The target is past everything buffered**, by a margin far below one
-     *   frame. A seek the sample queues can satisfy from memory is served from
-     *   memory, and serving it from memory reconnects nothing — which is the
-     *   one outcome this must never have. In a starved stall the playhead and
-     *   the buffer are at the same place anyway, so nothing is skipped.
-     * - **[SeekParameters.EXACT] for this one seek.** The player runs on
-     *   `CLOSEST_SYNC` because a ten-second skip is not worth a fetch back to
-     *   the preceding keyframe — but snapping is exactly wrong here: the
-     *   nearest sync sample can be *behind* the playhead and still inside the
-     *   back buffer, which lands right back in the memory-served case. Both
-     *   messages reach the playback thread in the order they are sent, so
-     *   restoring it immediately still leaves this seek exact.
+     * A mirror rarely *closes* a connection when it gives up; it stops sending, or
+     * sends too little. Neither is an error, and the player will happily wait out
+     * the read timeout on the first and sit on the second for the whole film. So the
+     * connection is judged while the loader is asking it for bytes, and well before
+     * the buffer runs out — see [StallTracker] — and a poor one is replaced in place,
+     * see [reconnect], which nobody can see. Only a link that has ignored new
+     * connections with the picture already stopped reaches [reopenCommitted], the one
+     * rung that resets the decoders.
      */
-    private fun softReconnect() {
-        Log.i(TAG, "soft reconnect at ${player.currentPosition}ms")
-        val target = maxOf(player.currentPosition, player.bufferedPosition)
-            .coerceAtLeast(0L) + RECONNECT_NUDGE_MS
+    private fun startStallWatch() {
+        // Called on every READY, and the tracker's record has to outlive a rebuffer:
+        // starting over would lose the backoff on exactly the link that needs it.
+        if (stallWatch?.isActive == true) return
+        stallWatch = scope.launch {
+            val tracker = StallTracker(
+                pollMs = STALL_POLL_MS,
+                windowMs = STALL_WINDOW_MS,
+                waitingWindowMs = STALL_WAITING_WINDOW_MS,
+                maxWindowMs = STALL_MAX_WINDOW_MS,
+                healthyRate = STALL_HEALTHY_RATE,
+                deadRate = STALL_DEAD_RATE,
+                reconnectsBeforeReopen = RECONNECTS_BEFORE_REOPEN,
+            )
+            val wedgeDetector = DemuxWedgeDetector(WEDGE_UNUSED_BYTES)
+            var damagedWaitMs = 0L
+            var loaderIdleMs = 0L
+            var lastPlayingPosition = C.TIME_UNSET
+            var clockFrozenMs = 0L
+
+            while (isActive) {
+                delay(STALL_POLL_MS)
+
+                val committed = committedStream != null
+                val waiting = committed && player.playWhenReady &&
+                    player.playbackState == Player.STATE_BUFFERING
+                val buffered = player.bufferedPosition
+
+                damage.onPoll(buffered)
+                // Not on a torrent. Its pieces are checked against their hashes, so what the
+                // demuxer gets is the file as published, and the torrent server hands over
+                // what has arrived and then waits, which reads just like a wedge. Measured:
+                // after a swarm left, a reopen was taken for damage and 5s of film skipped.
+                val torrent = committedStream?.kind == StreamKind.TORRENT
+                val wedged = wedgeDetector.onPoll(
+                    waiting = waiting && !torrent,
+                    bytesRead = dataPath.bytesRead,
+                    allocatedBytes = allocator.totalBytesAllocated.toLong(),
+                    bufferedMs = buffered,
+                )
+                if (wedged) {
+                    Log.w(TAG, "bytes arriving and no film coming out at ${player.currentPosition}ms")
+                    damage.record(SystemClock.elapsedRealtime())
+                }
+
+                // The film has reached bytes the demuxer cannot use. Nothing else below
+                // can help: every connection delivers the same bytes.
+                val damaged = committed && damage.standsSince(lastSeekAtMs)
+                damagedWaitMs = if (waiting && damaged) damagedWaitMs + STALL_POLL_MS else 0L
+                // Whatever is left in front of the damage cannot grow, so a player that
+                // wants more than that before restarting would wait for ever. It is given
+                // a moment only because it may simply be about to restart on it.
+                val reached = player.totalBufferedDuration < DAMAGE_REACHED_MS
+                if (damagedWaitMs > 0L && (reached || damagedWaitMs >= DAMAGE_STUCK_MS)) {
+                    damagedWaitMs = 0L
+                    skipDamage()
+                    continue
+                }
+
+                // Waiting for a picture with the loader not asked to load is not a
+                // slow link, it is a deadlock: nothing inside the engine will ask the
+                // LoadControl again. There is nothing to tell apart here, so the
+                // repair runs after two polls. The end of the file is excluded:
+                // loading has legitimately finished there.
+                val duration = player.duration
+                val loaderIdle = waiting && !player.isLoading &&
+                    duration > 0 && buffered < duration - END_OF_FILE_GUARD_MS
+                loaderIdleMs = if (loaderIdle) loaderIdleMs + STALL_POLL_MS else 0L
+                if (loaderIdleMs >= LOADER_IDLE_STALL_MS) {
+                    loaderIdleMs = 0L
+                    Log.w(
+                        TAG,
+                        "buffering with the loader idle at ${player.currentPosition}ms " +
+                            "(${player.totalBufferedDuration}ms buffered, " +
+                            "${allocator.totalBytesAllocated / MB}MB allocated) — flushing",
+                    )
+                    kickLoaderAt(player.currentPosition + FLUSH_NUDGE_MS)
+                    continue
+                }
+
+                // The freeze that never reaches STATE_BUFFERING: READY and playing,
+                // with the clock standing still. An audio sink whose track stopped
+                // consuming holds the video with it, since video is timed against
+                // audio. A seek flushes the renderers.
+                val position = player.currentPosition
+                val playing = committed && player.isPlaying
+                clockFrozenMs = if (
+                    playing && lastPlayingPosition != C.TIME_UNSET &&
+                    position - lastPlayingPosition < CLOCK_MIN_ADVANCE_MS
+                ) {
+                    clockFrozenMs + STALL_POLL_MS
+                } else {
+                    0L
+                }
+                lastPlayingPosition = if (playing) position else C.TIME_UNSET
+                if (clockFrozenMs >= CLOCK_FROZEN_MS) {
+                    clockFrozenMs = 0L
+                    lastPlayingPosition = C.TIME_UNSET
+                    Log.w(TAG, "clock frozen at ${position}ms while READY and playing — flushing renderers")
+                    kickLoaderAt(position + FLUSH_NUDGE_MS)
+                    continue
+                }
+
+                val action = tracker.onPoll(
+                    loaderActive = committed && player.isLoading && !damaged,
+                    waiting = waiting,
+                    bufferedMs = buffered,
+                    settling = SystemClock.elapsedRealtime() - lastSeekAtMs < SEEK_SETTLE_MS,
+                )
+                when (action) {
+                    StallTracker.Action.WAIT -> Unit
+                    StallTracker.Action.RECONNECT -> reconnect()
+                    StallTracker.Action.REOPEN -> {
+                        rememberPlaybackForFailover()
+                        // Answering at all means the network is fine and this host is the
+                        // problem, so a cold start would only get the same answer. With
+                        // nowhere else to go, waiting it out is still the best there is.
+                        if (isHostRefusing() && hasOtherCandidate()) committedRetries = COMMITTED_RETRY_LIMIT
+                        reopenCommitted()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun isHostRefusing(): Boolean =
+        SystemClock.elapsedRealtime() - hostRefusedAtMs < HOST_REFUSING_MS
+
+    private fun hasOtherCandidate(): Boolean = !manualMode && (
+        candidatesCollecting ||
+            queue.indices.any { it != queueIndex && it !in rejectedIndices && queue[it].url != null }
+        )
+
+    /**
+     * Replaces the connection feeding the player, without touching anything else.
+     *
+     * The load fails, and resumes from the byte it had reached on a new socket. What
+     * is buffered stays buffered, nothing is skipped, and the picture never knows.
+     */
+    private fun reconnect() {
+        Log.i(
+            TAG,
+            "reconnecting at ${player.currentPosition}ms: buffer edge ${player.bufferedPosition}ms, " +
+                "state ${player.playbackState}",
+        )
+        dataPath.abortPlayerRead()
+    }
+
+    /**
+     * Moves past a stretch of the file the demuxer cannot read, as a viewer would
+     * by pressing skip — which until now was the only thing that got past one.
+     *
+     * The step grows while the damage keeps going, so a single bad block costs a few
+     * seconds of film. A file that is damaged for minutes at a time is not worth
+     * crossing, and is handed to the cascade like any other source that stopped
+     * working, which picks the film up from where it first broke: the next source has
+     * no damage there, and the skips were only ever a way around this one's.
+     *
+     * Neither is a file with no index, which cannot be crossed at all. Every seek in one
+     * lands back at zero, and the film would replay up to the same damage for ever.
+     */
+    private fun skipDamage() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastDamageSkipAtMs > DAMAGE_QUIET_MS) damageSkips = 0
+        lastDamageSkipAtMs = now
+        val position = player.currentPosition
+        if (damageSkips == 0) damageStartedAtMs = position
+
+        if (damageSkips >= MAX_DAMAGE_SKIPS || !player.isCurrentMediaItemSeekable) {
+            Log.w(TAG, "damaged at ${position}ms after $damageSkips skips — giving up on this source")
+            damageSkips = 0
+            damage.clear()
+            rememberPlaybackForFailover()
+            failoverPositionMs = damageStartedAtMs
+            rejectedIndices += queueIndex
+            committedStream = null
+            committedRetries = 0
+            if (manualMode) fail(PlaybackFailure.ManualFailed) else tryAdvance()
+            return
+        }
+
+        val step = (DAMAGE_SKIP_MS shl damageSkips).coerceAtMost(DAMAGE_MAX_SKIP_MS)
+        damageSkips++
+        Log.w(TAG, "damaged file at ${position}ms — skipping ${step}ms (skip #$damageSkips)")
+        seekTo(position + step)
+    }
+
+    /** An exact seek, which flushes the renderers wherever it lands. */
+    private fun kickLoaderAt(targetMs: Long) {
         _state.update { it.copy(phase = PlaybackPhase.BUFFERING, error = null) }
         player.setSeekParameters(SeekParameters.EXACT)
-        noteSeek()
-        player.seekTo(target)
+        noteSeek(targetMs)
+        player.seekTo(targetMs)
         player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
     }
 
     /**
-     * Records that the loader is about to be sent somewhere new — see
-     * [lastSeekAtMs]. Every `player.seekTo` in this class is paired with one
-     * of these, because a seek nobody recorded is a stall nobody can explain.
+     * Prepares the loader for a seek, which only concerns it when the target is outside
+     * the buffer. Inside, nothing new is requested, so there is no silence to excuse
+     * and no read to end. Outside, the new load needs the loader's thread, which a read
+     * on a quiet socket would hold until the timeout — see [AbortableCallFactory].
      */
-    private fun noteSeek() {
+    private fun noteSeek(targetMs: Long) {
+        if (targetMs in player.currentPosition..player.bufferedPosition) return
         lastSeekAtMs = SystemClock.elapsedRealtime()
-    }
-
-    /**
-     * Decides how much of [hint] is still true, and keeps that much.
-     *
-     * Which of the two positions is the later one, not which is the more
-     * official one. The note is refreshed on a timer as well as on every phase
-     * change; the provider only hears about phase changes. So a film watched
-     * straight through with no pause leaves the note tens of minutes ahead of
-     * the provider, and reading that gap as "watched elsewhere" would throw
-     * away the fresher of the two every time.
-     *
-     * The provider still wins when it is genuinely *ahead*, because that can
-     * only mean another device carried the title further than this one ever
-     * did. The release name is kept whichever way it goes: a file is still the
-     * same file wherever it was last watched.
-     */
-    private fun applyHint(hint: PlaybackHint?) {
-        val storedPercent = hint?.progressPercent
-        val syncedPercent = resumePercent
-        val stillCurrent = storedPercent != null &&
-            (syncedPercent == null || storedPercent >= syncedPercent - HINT_PERCENT_TOLERANCE)
-        resumeExactMs = hint?.positionMs?.takeIf { it > 0 && stillCurrent }
-        preferredFilename = hint?.sourceFilename?.takeIf { it.isNotBlank() }
-    }
-
-    /**
-     * What is worth remembering about this playback — see [PlaybackHint].
-     *
-     * Null until there is something true to say: a position of zero is the
-     * state before anything has been watched, and a duration of zero means the
-     * file has not been demuxed far enough to know what a position even means.
-     */
-    fun hint(): PlaybackHint? {
-        val position = _state.value.positionMs
-        val duration = _state.value.durationMs
-        if (position <= 0 || duration <= 0) return null
-        return PlaybackHint(
-            positionMs = position,
-            durationMs = duration,
-            sourceFilename = committedStream?.filename,
-        )
+        dataPath.abortPlayerRead()
     }
 
     private fun sincePlayMs(): Long = SystemClock.elapsedRealtime() - playStartedAtMs
@@ -1750,25 +1855,23 @@ class PlaybackController(
         )
     }
 
-    private fun startTicker() {
-        ticker?.cancel()
-        ticker = scope.launch {
-            while (isActive) {
-                delay(if (osdVisible) TICK_MS else IDLE_TICK_MS)
-                publishPosition()
-            }
-        }
-    }
-
     private fun publishPosition() {
         updatePrefetch()
-        _state.update {
-            it.copy(
+        // A burst owns the published position until it commits. Without this
+        // the tick would drag the seek bar back to the playhead between
+        // presses, and a hold would look like it was fighting the viewer.
+        if (pendingSeekTargetMs == null) {
+            _position.value = PlaybackPosition(
                 positionMs = player.currentPosition.coerceAtLeast(0),
                 durationMs = player.duration.coerceAtLeast(0),
-                phase = nextPollPhase(it.phase),
             )
         }
+        // Separate from the position above, and that separation is the point:
+        // the phase is the same on almost every tick, so this `copy` compares
+        // equal and `MutableStateFlow` drops it without waking a single
+        // collector. The position lands on its own flow, where only the seek
+        // bar is listening.
+        _state.update { it.copy(phase = nextPollPhase(it.phase)) }
     }
 
     private fun nextPollPhase(current: PlaybackPhase): PlaybackPhase = when (current) {
@@ -1787,38 +1890,106 @@ class PlaybackController(
     }
 
     fun pause() = runCatching {
-        pausedAtMs = SystemClock.elapsedRealtime()
         player.pause()
         _state.update { if (it.canShowVideo) it.copy(phase = PlaybackPhase.PAUSED) else it }
     }.let { }
 
     fun resume() = runCatching {
-        // See [connectionSuspect]. A pause long enough for an idle socket to
-        // have been dropped is the one moment this app knows more about the
-        // connection than the engine does, and saying so here is what lets the
-        // stall watch act in seconds rather than waiting out a read timeout it
-        // could have predicted.
-        if (pausedAtMs != 0L &&
-            SystemClock.elapsedRealtime() - pausedAtMs >= PAUSE_SOCKET_IDLE_MS
-        ) {
-            connectionSuspect = true
-        }
-        pausedAtMs = 0L
         player.play()
         _state.update { if (it.canShowVideo) it.copy(phase = PlaybackPhase.PLAYING) else it }
     }.let { }
 
+    /**
+     * One press of skip-forward/back, which is not one seek.
+     *
+     * Holding the D-pad does not deliver one key event. The platform
+     * auto-repeats it every ~50ms after an initial pause, so a two-second hold
+     * used to reach the engine as some thirty separate `seekTo` calls — thirty
+     * range requests, each cancelling the one before it, thirty codec flushes,
+     * and the read-ahead chunk in flight thrown away thirty times. The skip
+     * that felt slowest was the one the viewer asked for most clearly.
+     *
+     * So a burst is accumulated instead. The target moves on [position]
+     * immediately, which is what the seek bar and the time label read, and the
+     * engine is only asked once the presses stop for [SEEK_COMMIT_DELAY_MS].
+     * Crossing twenty minutes of film costs exactly one range request.
+     *
+     * The step grows with the burst — see [stepForBurst] — so the same hold
+     * that used to walk ten seconds at a time crosses half an hour without the
+     * first press losing its precision.
+     */
+    fun nudge(forward: Boolean) {
+        val duration = _position.value.durationMs
+        if (duration <= 0 || !player.isCurrentMediaItemSeekable) return
+
+        // From the pending target, never from the playhead: the film is still
+        // playing underneath a burst, and reading the live position would let
+        // playback creep into the arithmetic between presses.
+        val base = pendingSeekTargetMs ?: _position.value.positionMs
+        val step = stepForBurst(nudgeCount)
+        nudgeCount++
+
+        val target = (base + if (forward) step else -step).coerceIn(0, duration)
+        pendingSeekTargetMs = target
+        _position.update { it.copy(positionMs = target) }
+
+        pendingSeekJob?.cancel()
+        pendingSeekJob = scope.launch {
+            delay(SEEK_COMMIT_DELAY_MS)
+            commitPendingSeek()
+        }
+    }
+
+    /** Hands the burst's final target to the engine, as a single seek. */
+    private fun commitPendingSeek() {
+        val target = pendingSeekTargetMs ?: return
+        Log.i(TAG, "seek burst of $nudgeCount press(es) committed to ${target}ms")
+        clearPendingSeek()
+        seekTo(target)
+    }
+
+    private fun clearPendingSeek() {
+        pendingSeekJob?.cancel()
+        pendingSeekJob = null
+        pendingSeekTargetMs = null
+        nudgeCount = 0
+    }
+
+    /**
+     * How far one press moves, given how many have already landed in this
+     * burst.
+     *
+     * Fine steps first so a small correction stays a small correction, then
+     * coarser ones — the same shape the subtitle-offset slider already uses,
+     * and for the same reason: the first half-second of a hold must stay
+     * precise, and the fifth second must cover ground.
+     */
+    private fun stepForBurst(count: Int): Long = when {
+        count < NUDGE_FINE_STEPS -> NUDGE_STEP_MS
+        count < NUDGE_MEDIUM_STEPS -> NUDGE_STEP_MS * 3
+        else -> NUDGE_STEP_MS * 6
+    }
+
     fun seekTo(positionMs: Long) {
-        val duration = _state.value.durationMs
-        if (duration <= 0) return
+        val duration = _position.value.durationMs
+        // A file with no index answers any seek by going back to the start of the film.
+        if (duration <= 0 || !player.isCurrentMediaItemSeekable) return
+        // An absolute seek — the seek bar dragged, a resume correction — ends
+        // any burst rather than racing it.
+        clearPendingSeek()
         val clamped = positionMs.coerceIn(0, duration)
-        noteSeek()
+        noteSeek(clamped)
         player.seekTo(clamped)
-        _state.update { it.copy(positionMs = clamped) }
+        // The chunk in flight was fetched for where the viewer just left, and
+        // on a slow link it can be tens of seconds of download standing between
+        // them and the bytes they now need.
+        prefetcher?.invalidate()
+        _position.update { it.copy(positionMs = clamped) }
         updateActiveCueNow()
     }
 
-    fun seekBy(deltaMs: Long) = seekTo(_state.value.positionMs + deltaMs)
+    /** Moves relative to where the playhead is, or to where a seek just sent it. */
+    fun seekBy(deltaMs: Long) = seekTo(_position.value.positionMs + deltaMs)
 
     /**
      * Walks [SCALE_CYCLE], wrapping — the "esticar"/aspect-ratio button.
@@ -1917,9 +2088,9 @@ class PlaybackController(
             it.copy(
                 externalSubtitle = option.takeIf { resolvedTrack != null },
                 subtitleOffsetMs = 0L,
-                activeSubtitleCue = null,
             )
         }
+        _activeSubtitleCue.value = null
 
         if (resolvedTrack == null) {
             subtitleTicker?.cancel()
@@ -1979,15 +2150,15 @@ class PlaybackController(
     private fun updateActiveCueNow() {
         val track = subtitleTrack ?: return
         val timeMs = player.currentPosition - _state.value.subtitleOffsetMs
-        val text = track.cueAt(timeMs)?.text
-        if (_state.value.activeSubtitleCue != text) {
-            _state.update { it.copy(activeSubtitleCue = text) }
-        }
+        // No guard against an unchanged line: `MutableStateFlow` compares with
+        // `equals` before emitting, so writing the same text eight times a
+        // second wakes nobody.
+        _activeSubtitleCue.value = track.cueAt(timeMs)?.text
     }
 
     /** Keeps an already-started film in place if Media3 needs another URL. */
     private fun rememberPlaybackForFailover() {
-        val position = maxOf(_state.value.positionMs, player.currentPosition).coerceAtLeast(0L)
+        val position = maxOf(_position.value.positionMs, player.currentPosition).coerceAtLeast(0L)
         if (!_state.value.canShowVideo && position == 0L) return
 
         failoverPositionMs = position
@@ -1995,7 +2166,25 @@ class PlaybackController(
     }
 
     /** Where the scrobbler reads from: 0–100 of the running title. */
-    fun progressPercent(): Float = _state.value.progress * 100f
+    fun progressPercent(): Float = _position.value.progress * 100f
+
+    /**
+     * What is worth remembering about this playback — see [PlaybackHint].
+     *
+     * Null until there is something true to say: a position of zero is the
+     * state before anything has been watched, and a duration of zero means the
+     * file has not been demuxed far enough to know what a position even means.
+     */
+    fun hint(): PlaybackHint? {
+        val position = _position.value.positionMs
+        val duration = _position.value.durationMs
+        if (position <= 0 || duration <= 0) return null
+        return PlaybackHint(
+            positionMs = position,
+            durationMs = duration,
+            sourceFilename = committedStream?.filename,
+        )
+    }
 
     private fun stopInternal() {
         prefetcher?.stop()
@@ -2016,13 +2205,21 @@ class PlaybackController(
         failoverPositionMs = null
         failoverPlayWhenReady = null
         lastSeekAtMs = 0L
-        connectionSuspect = false
-        pausedAtMs = 0L
+        damage.clear()
+        damageSkips = 0
+        lastDamageSkipAtMs = 0L
+        clearPendingSeek()
         preferredWatch?.cancel()
         preferredWatch = null
         awaitingPreferred = false
         preferredFilename = null
         resumeExactMs = null
+        // Reset alongside the state the three of them used to live in. Every
+        // caller of this — `play`, `stop`, `release` — is a new title or no
+        // title, and a playhead left over from the last one would be read by
+        // the seek bar before the first tick of the next.
+        _position.value = PlaybackPosition()
+        _activeSubtitleCue.value = null
         runCatching { player.stop() }
     }
 
@@ -2034,6 +2231,7 @@ class PlaybackController(
         selectionValidationMode = false
         stopAfterFirstValidatedSource = false
         validatedSources.clear()
+        offlineRequest = null
         _state.value = PlaybackState()
     }
 
@@ -2046,6 +2244,7 @@ class PlaybackController(
      */
     fun release() {
         stopInternal()
+        onSourceOpened(null)
         subtitleTrack = null
         player.removeListener(this)
         player.release()
@@ -2073,6 +2272,16 @@ class PlaybackController(
 
         const val MAX_PASSES = 2
 
+        /**
+         * How long a short queue keeps being walked, from [play], before the cascade fails.
+         * Past [MAX_PASSES], each walk waits [PASS_PAUSE_MS], doubling to [MAX_PASS_PAUSE_MS],
+         * so a single dead link is tried about seven times. A long queue has spent this on
+         * its two passes already, and fails as it did.
+         */
+        const val PERSIST_MS = 60_000L
+        const val PASS_PAUSE_MS = 2_000L
+        const val MAX_PASS_PAUSE_MS = 15_000L
+
         /** Position polling while the OSD is up — see [startTicker]. */
         const val TICK_MS = 500L
 
@@ -2086,74 +2295,64 @@ class PlaybackController(
          */
         const val IDLE_TICK_MS = 4_000L
 
+        /**
+         * `adb logcat -s Playback` is the whole point: startup here is a
+         * cascade, and without these lines the only thing anyone can say about
+         * a slow start is that it was slow.
+         */
+        const val TAG = "Playback"
+
+        /** For the byte figures in [TAG]'s lines; nothing reads it but a log. */
+        const val MB = 1024 * 1024
+
         const val SUBTITLE_TICK_MS = 120L
 
         /**
-         * Share of the disk cache the read-ahead window may occupy.
+         * How long the presses have to stop before a burst of skips is handed
+         * to the engine — see [nudge].
          *
-         * The rest is left for what has already been watched. Both directions
-         * come out of one `LeastRecentlyUsedCacheEvictor`, so this is the line
-         * between "rewind is free" and "the next several minutes are already
-         * here" — and taking all of it for the second would make a backward
-         * seek re-download every time.
-         *
-         * Weighted three-to-one toward read-ahead because the two sides are not
-         * worth the same. Behind the playhead, a quarter of a large cache is
-         * already many minutes of instant rewind, and the cost of missing is a
-         * re-download the viewer waits a moment for. Ahead of it, the cost of
-         * missing is the picture stopping.
+         * Above the ~50ms the platform auto-repeats a held key at, by enough
+         * that no hold is ever cut in half, and below what anyone reads as lag
+         * between letting go and the picture moving.
          */
-        const val PREFETCH_CACHE_SHARE = 0.75
+        const val SEEK_COMMIT_DELAY_MS = 350L
+
+        /** What one press moves at the start of a burst. */
+        const val NUDGE_STEP_MS = 10_000L
 
         /**
-         * How often a committed source is checked for a frozen buffer.
-         *
-         * Two field reads on the main thread, so the cost is nil, and a second
-         * is fine enough that quantisation is a rounding error against
-         * [STALL_FROZEN_MS].
+         * Where the step coarsens: 10s while the burst is short, then 30s,
+         * then 60s. Four seconds of holding covers about half an hour.
          */
+        const val NUDGE_FINE_STEPS = 4
+        const val NUDGE_MEDIUM_STEPS = 12
+
+        /** How often a committed source is checked. Two field reads on the main thread. */
         const val STALL_POLL_MS = 1_000L
 
         /**
-         * How long `bufferedPosition` may stand perfectly still, while the
-         * viewer is waiting for a picture, before the link is reopened.
-         *
-         * Two bounds decide this. Long enough that a source still trickling is
-         * never touched — any byte demuxed moves the buffer and resets the
-         * count, so this can only fire on a link delivering literally nothing.
-         * Short enough to land well inside the read timeout it exists to
-         * pre-empt, since waiting for that timeout is the freeze being fixed.
+         * How long a connection is measured before it is judged, with film in hand.
+         * Short enough to replace a bad one before the buffer runs out.
          */
-        const val STALL_FROZEN_MS = 10_000L
+        const val STALL_WINDOW_MS = 8_000L
+
+        /** The same with the picture stopped, because now somebody is waiting. */
+        const val STALL_WAITING_WINDOW_MS = 5_000L
+
+        /** Where the backoff stops on a link that is simply slower than the film. */
+        const val STALL_MAX_WINDOW_MS = 64_000L
 
         /**
-         * Media the buffer must gain across one [STALL_FROZEN_MS] window for
-         * the source to count as recovering rather than stalled.
-         *
-         * A fifth of real time. The number that matters against it is
-         * `bufferForPlaybackAfterRebufferMs`: playback does not resume until
-         * that much is buffered, so a link running at a fifth of real time
-         * needs the better part of a minute to produce a picture and will
-         * rebuffer within seconds of doing so. Replacing the connection is
-         * both faster and likelier to work — it is, exactly, what the viewer
-         * was doing by hand every time they pressed skip to unstick a film.
-         *
-         * Not lower, because playback is stopped while this is measured: the
-         * buffer grows at the full delivery rate, so anything a viewer would
-         * sit through clears this bar comfortably.
+         * Share of real time the buffer must gain for a connection to count as healthy.
+         * Under 1, because a scene above the file's average bitrate is not a bad link.
          */
-        const val STALL_MIN_PROGRESS_MS = 2_000L
+        const val STALL_HEALTHY_RATE = 0.6
 
-        /**
-         * The same measurement, for a connection already presumed dead.
-         *
-         * Only ever reached through [connectionSuspect], which is only ever set
-         * after a pause long enough to have cost the socket. There is no
-         * evidence left to gather at that point — the ten seconds above buy
-         * certainty this case already has — and the repair it leads to is the
-         * cheap one.
-         */
-        const val STALL_SUSPECT_MS = 3_000L
+        /** Below this, with the picture stopped, the link is dead rather than slow. */
+        const val STALL_DEAD_RATE = 0.2
+
+        /** New connections tried on a dead link before it is reopened from cold. */
+        const val RECONNECTS_BEFORE_REOPEN = 2
 
         /**
          * How long a seek is allowed to go unanswered before the silence it
@@ -2167,42 +2366,70 @@ class PlaybackController(
         const val SEEK_SETTLE_MS = 15_000L
 
         /**
-         * Soft reconnections before a stall is escalated to a full re-prepare.
-         *
-         * One is enough to answer the failure this exists for — an idle socket
-         * dropped during a pause, or one the host stopped writing to — and a
-         * second would only delay the cascade for a link that is really gone.
+         * How far a flush moves the playhead. Below half a frame at any frame rate, and
+         * above the rounding the engine compares seek targets with — a target that rounds
+         * to the position already held is discarded as "already there".
          */
-        const val SOFT_RECONNECT_LIMIT = 1
+        const val FLUSH_NUDGE_MS = 10L
 
         /**
-         * How far past the buffer [softReconnect] aims.
-         *
-         * Below half a frame at any frame rate, so no picture is skipped, and
-         * comfortably above the millisecond rounding the engine compares seek
-         * targets with — a target that rounds to the position already held is
-         * discarded as "already there", which would leave the dead socket
-         * exactly where it was.
+         * How long the player may wait for a picture with nothing loading
+         * before the stall watch flushes it — see [startStallWatch].
+         * Two polls, so one sampled between a seek and its load starting
+         * cannot trigger it.
          */
-        const val RECONNECT_NUDGE_MS = 10L
+        const val LOADER_IDLE_STALL_MS = 2_000L
+
+        /** Within this of the end, an idle loader means the file is all read. */
+        const val END_OF_FILE_GUARD_MS = 1_000L
 
         /**
-         * How long a pause has to last before the connection is assumed lost.
-         *
-         * Well under the minute or two an idle socket typically survives on a
-         * carrier NAT, and well over a glance away from the screen. Being wrong
-         * in the generous direction costs nothing: [connectionSuspect] is
-         * cleared by the first byte that arrives.
+         * Playhead progress per poll below which a READY, playing player
+         * counts as frozen. Well under real time, well over the few
+         * milliseconds `currentPosition` extrapolates between engine updates.
          */
-        const val PAUSE_SOCKET_IDLE_MS = 45_000L
+        const val CLOCK_MIN_ADVANCE_MS = 250L
+
+        /** How long the clock may stand still while playing before it is flushed. */
+        const val CLOCK_FROZEN_MS = 4_000L
 
         /**
-         * `adb logcat -s Playback` is the whole point: startup here is a
-         * cascade, and without these lines the only thing anyone can say about
-         * a slow start is that it was slow.
+         * Read with nothing to show for it before the demuxer counts as stuck — see
+         * [DemuxWedgeDetector]. Well above any header, and small enough to be reached in
+         * seconds at any speed a film could play at.
          */
-        const val TAG = "Playback"
+        const val WEDGE_UNUSED_BYTES = 2L * 1024 * 1024
 
+        /** How the two errors [isLinkGone] recognises come back from the player. */
+        val LINK_GONE_ERROR_CODES = setOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE,
+        )
+
+        /** The first `errorCount` that always means the same bytes failed twice. */
+        const val DAMAGE_CONFIRMED_ERRORS = 3
+
+        /** A buffer edge this far past a report of damage means the load got through. */
+        const val DAMAGE_PASSED_MS = 2_000L
+
+        /**
+         * Damage is recorded when the loader reaches it, often minutes ahead of the
+         * picture. Skipping waits until the film has really played up to it.
+         */
+        const val DAMAGE_REACHED_MS = 1_000L
+
+        /** How long the picture may stay stopped with damage ahead and film still in hand. */
+        const val DAMAGE_STUCK_MS = 3_000L
+
+        /** The first skip past damage, doubling up to [DAMAGE_MAX_SKIP_MS]. */
+        const val DAMAGE_SKIP_MS = 5_000L
+        const val DAMAGE_MAX_SKIP_MS = 60_000L
+
+        /** Over five minutes of film at those steps: not a bad block, a bad file. */
+        const val MAX_DAMAGE_SKIPS = 8
+
+        /** Playing this long without more damage ends the episode and resets the step. */
+        const val DAMAGE_QUIET_MS = 60_000L
 
         /** How far off the runtime estimate may be before a resume is corrected. */
         const val RESUME_TOLERANCE_MS = 5_000L
@@ -2225,29 +2452,30 @@ class PlaybackController(
          * Covers the first probed batch, and no more: the flow emits its
          * best-ranked candidate immediately — unprobed, and measurably often a
          * thirty-second "not available" clip — then the rest in concurrent
-         * batches. A release that has not appeared by then is caught by the
-         * promotion in the collector instead, which costs nothing at all.
+         * batches. Waiting that long to skip opening the dud is worth it; a
+         * release that has not appeared by then is caught by the promotion in
+         * the collector instead, which costs nothing at all.
          *
          * Spent only on a title this app has played before, and only once.
          */
         const val PREFERRED_GRACE_MS = 3_000L
 
         /**
-         * Load-level retries before an error is allowed to become fatal.
-         *
-         * Media3's default is three, sized for a well-behaved CDN. The hosts
-         * here are neither, and the cost of waiting is a paused picture where
-         * the cost of giving up is the film restarting somewhere else.
+         * Load errors a candidate may have before it has produced a frame. Three read
+         * timeouts is about the whole attempt cap, so a cold debrid link still gets all of
+         * its time, and a host refusing connections is gone in a second and a half.
          */
-        const val LOAD_RETRY_COUNT = 12
-        const val LOAD_RETRY_STEP_MS = 1_000L
-        const val LOAD_RETRY_MAX_MS = 10_000L
+        const val UNCOMMITTED_LOAD_ERRORS = 3
 
-        /**
-         * Full re-prepares of an already-playing link before the cascade is
-         * allowed to take over again. With the load retries above underneath
-         * each one, this is several minutes of patience.
-         */
+        /** The ramp between load retries: fast after a reconnect, gentle on a bad host. */
+        const val LOAD_RETRY_FIRST_MS = 250L
+        const val LOAD_RETRY_STEP_MS = 1_000L
+        const val LOAD_RETRY_MAX_MS = 5_000L
+
+        /** Twice the slowest load retry, so a host still refusing is always this recent. */
+        const val HOST_REFUSING_MS = 2 * LOAD_RETRY_MAX_MS
+
+        /** Full re-prepares of an already-playing link before the cascade takes over. */
         const val COMMITTED_RETRY_LIMIT = 6
 
         /**
@@ -2265,5 +2493,47 @@ class PlaybackController(
 
         // The offset range itself lives in `PlaybackState.kt`, public, because
         // the sync bar has to draw exactly the range this clamps to.
+    }
+}
+
+/**
+ * The stable identity of the file: debrid links are signed and expire, so the URL
+ * would miss on every visit. The size goes with the name because addons do report
+ * generic names, and two films sharing one would read each other's spans. Null falls
+ * back to the URL, which still serves a seek inside the current session.
+ */
+private fun PlayableStream.cacheKey(): String? {
+    val name = filename?.takeIf { it.isNotBlank() } ?: return null
+    return sizeBytesHint?.let { "$name#$it" } ?: name
+}
+
+internal fun Throwable.causes(): Sequence<Throwable> = generateSequence(this) { it.cause }
+
+/**
+ * Failures that come from the bytes rather than from the connection carrying them.
+ *
+ * A bare `EOFException` comes from a demuxer that believed an element ran past the end
+ * of the file. Only a bare one: wrapped inside an I/O error it is a connection closing
+ * while its headers were being read, which says nothing about the file. An unexpected
+ * loader exception is an extractor crashing on what it read, which garbage does as
+ * readily as failing to parse.
+ */
+@OptIn(UnstableApi::class)
+private fun Throwable.isDamagedContent(): Boolean =
+    this is EOFException || this is Loader.UnexpectedLoaderException ||
+        causes().any { it is ParserException }
+
+/**
+ * The host saying it will not serve this film from here. Either in so many words, or with
+ * nothing at the position asked for: a file shorter than its index promises answers 416,
+ * and an error page sent with a 200 in place of the film ends before reaching it.
+ */
+@OptIn(UnstableApi::class)
+private fun Throwable.isLinkGone(): Boolean = causes().any {
+    when (it) {
+        is HttpDataSource.InvalidResponseCodeException ->
+            it.responseCode in setOf(400, 401, 403, 404, 410, 416)
+        is DataSourceException -> it.reason == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE
+        else -> false
     }
 }

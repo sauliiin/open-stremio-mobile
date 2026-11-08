@@ -129,11 +129,13 @@ private val WRITER_JOBS = setOf("Screenplay", "Writer", "Story")
  * Folds the three metadata sources into one cache row.
  *
  * TMDB is the spine because it resolves the IMDb id everything else is keyed
- * by; mdblist contributes the aggregated ratings, and OMDb only fills the gaps
- * mdblist left. Any of the three being absent degrades the row rather than
- * failing it — a detail screen with no Metacritic score is still a screen.
- * Trakt reviews come from Trakt itself when it has any, mdblist's mirror
- * otherwise.
+ * by, and it owns the editorial metadata; mdblist only fills a field TMDB left
+ * blank. Ratings are merged from all three — TMDB's own score first, then
+ * mdblist's aggregate, then OMDb — so a title shows every service any of them
+ * knows about rather than only the first source that answered. Any of the
+ * three being absent degrades the row rather than failing it. TMDB reviews come
+ * from TMDB directly; Trakt reviews from Trakt itself when it has any, mdblist's
+ * mirror otherwise.
  */
 fun buildDetailEntity(
     type: MediaType,
@@ -149,8 +151,11 @@ fun buildDetailEntity(
     val crew = credits?.crew.orEmpty()
     val date = tmdb.date ?: info?.released
 
-    val ratings = RatingsMapper.fromMdblist(info?.ratings)
-        .ifEmpty { RatingsMapper.fromOmdb(omdb) }
+    val ratings = RatingsMapper.merge(
+        RatingsMapper.fromTmdb(tmdb.voteAverage, tmdb.voteCount),
+        RatingsMapper.fromMdblist(info?.ratings),
+        RatingsMapper.fromOmdb(omdb),
+    )
 
     // A logo with no text baked in reads best over fanart, and TMDB ranks its
     // artwork by votes — so the best-voted Portuguese or English one wins.
@@ -218,16 +223,31 @@ fun buildDetailEntity(
                 score = (result.voteAverage * 10).roundToInt().takeIf { it > 0 },
             )
         },
-        // mdblist's `provider_id`: 1 = Trakt, 2 = TMDB.
-        reviews = info?.reviews.orEmpty().filter { it.providerId != 1 }.mapNotNull { review ->
+        reviews = tmdb.reviews?.results.orEmpty().mapNotNull { review ->
             review.content.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             Review(
-                author = review.author.ifBlank { CoreText.anonymous },
+                author = review.author.ifBlank {
+                    review.authorDetails?.name?.takeIf { it.isNotBlank() }
+                        ?: review.authorDetails?.username.orEmpty()
+                }.ifBlank { CoreText.anonymous },
                 content = review.content,
-                rating = review.rating,
+                rating = review.authorDetails?.rating,
                 provider = ReviewProvider.TMDB,
                 updatedAt = review.updatedAt,
             )
+        }.ifEmpty {
+            // TMDB's own reviews first; mdblist's mirror of them (`provider_id`
+            // 2 — 1 is Trakt) only when TMDB answered with none.
+            info?.reviews.orEmpty().filter { it.providerId != 1 }.mapNotNull { review ->
+                review.content.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                Review(
+                    author = review.author.ifBlank { CoreText.anonymous },
+                    content = review.content,
+                    rating = review.rating,
+                    provider = ReviewProvider.TMDB,
+                    updatedAt = review.updatedAt,
+                )
+            }
         } + traktReviews(traktComments, info),
         metadataComplete = metadataComplete,
         fetchedAt = now,

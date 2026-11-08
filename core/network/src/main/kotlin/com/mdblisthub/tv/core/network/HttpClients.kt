@@ -7,6 +7,7 @@ import okhttp3.CacheControl
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -148,17 +149,27 @@ object HttpClients {
      * body, and here the body is a two-hour film — the addon client's twelve
      * seconds would cut playback off mid-scene. The read timeout is what
      * catches a host that goes quiet, and that is the correct tool.
+     *
+     * **HTTP/1.1 only**, so that a new request means a new socket. Under HTTP/2
+     * every read on a host shares one connection and one flow-control window:
+     * reconnecting would reuse the same dead TCP connection, and a loader that
+     * stopped reading would starve the prefetcher beside it.
+     *
+     * Short timeouts cost little, because a load that times out resumes from the
+     * byte it had reached. A cold debrid link that needs longer is simply asked
+     * again, up to the attempt cap in `PlaybackController`.
+     *
+     * [ResolvedLinks] sends every request after the first straight to the CDN a
+     * debrid addon redirected to, instead of through the addon again.
      */
     fun playback(base: OkHttpClient): OkHttpClient = base.newBuilder()
         .cache(null)
-        // Generous for the same reason the data source used to be: a debrid
-        // endpoint redirects instantly and then holds the connection open
-        // while the file is prepared upstream, well past thirty seconds on a
-        // cold link.
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .protocols(listOf(Protocol.HTTP_1_1))
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .callTimeout(0, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
+        .addInterceptor(ResolvedLinks)
         .build()
 
     /**
